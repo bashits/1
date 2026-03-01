@@ -72,8 +72,10 @@ export const api = {
   // AI Profiles
   getProfiles: () => apiFetch<AIProfile[]>("/api/ai-profiles/"),
   getProfilePresets: () => apiFetch<ProfilePresets>("/api/ai-profiles/presets"),
+  generatePersona: (name?: string) =>
+    apiFetch<GeneratedPersona>("/api/ai-profiles/generate-persona", { method: "POST", body: JSON.stringify(name ? { name } : {}) }),
   createProfile: (data: CreateProfileData) =>
-    apiFetch<AIProfile>("/api/ai-profiles/", { method: "POST", body: JSON.stringify(data) }),
+    apiFetch<AIProfile & { auto_generated_photo?: string | null }>("/api/ai-profiles/", { method: "POST", body: JSON.stringify(data) }),
   updateProfile: (id: number, data: Partial<AIProfile>) =>
     apiFetch<AIProfile>(`/api/ai-profiles/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   getProfilePipeline: (id: number) => apiFetch<ProfilePipeline>(`/api/ai-profiles/${id}/pipeline`),
@@ -410,9 +412,11 @@ export interface ProfilePresets {
 }
 
 export interface CreateProfileData {
-  name: string;
+  name?: string;
   style?: string;
   description?: string;
+  auto_generate?: boolean;
+  auto_generate_photo?: boolean;
   appearance_preset?: string;
   personality_preset?: string;
   voice_preset?: string;
@@ -420,6 +424,41 @@ export interface CreateProfileData {
   instagram_handle?: string;
   tiktok_handle?: string;
   telegram_channel?: string;
+}
+
+export interface GeneratedPersona {
+  name: string;
+  identity_seed: string;
+  appearance: {
+    ethnicity: string;
+    hair_color: string;
+    hair_style: string;
+    eye_color: string;
+    skin_tone: string;
+    body_type: string;
+    face_shape: string;
+    nose: string;
+    lips: string;
+    unique_feature: string;
+    age: number;
+    age_range: string;
+    style_tags: string[];
+  };
+  personality: {
+    archetype: string;
+    tone: string;
+    speaking_style: string;
+    bio_trait: string;
+    reactions: string[];
+    catchphrases: string[];
+    language: string;
+    emoji_style: string;
+  };
+  voice_config: Record<string, unknown>;
+  bio: string;
+  archetype_name: string;
+  voice_persona_id: string;
+  elevenlabs_voice_name: string;
 }
 
 export interface ProfilePipeline {

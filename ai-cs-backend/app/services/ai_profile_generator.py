@@ -16,10 +16,11 @@ Best-quality pipeline (2026):
 
 import json
 import random
+import hashlib
 from datetime import datetime
 
 
-# ─── Default appearance presets ───────────────────────────────────────
+# ─── Default appearance presets (legacy, kept for backward compatibility) ─────
 APPEARANCE_PRESETS = {
     "realistic_european": {
         "ethnicity": "european",
@@ -106,6 +107,379 @@ VOICE_PRESETS = {
         "alternative_models": ["chatterbox-turbo"],
     },
 }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# SMART UNIQUE PERSONA GENERATOR
+# Creates truly unique AI girls with randomized features, personality,
+# voice characteristics — no two girls are ever the same.
+# ═══════════════════════════════════════════════════════════════════════
+
+# --- Appearance trait pools (each trait randomly selected) ---
+_ETHNICITIES = [
+    "european", "eastern european", "scandinavian", "mediterranean",
+    "latin american", "brazilian", "colombian", "asian", "korean",
+    "japanese", "chinese", "southeast asian", "middle eastern",
+    "african american", "mixed race", "indian", "pacific islander",
+]
+
+_HAIR_COLORS = [
+    "platinum blonde", "golden blonde", "strawberry blonde", "honey blonde",
+    "ash blonde", "light brown", "chestnut brown", "dark brown",
+    "chocolate brown", "auburn", "copper red", "fiery red", "ginger",
+    "jet black", "blue-black", "dark auburn", "caramel highlights",
+    "ombre blonde-to-brown", "silver platinum", "rose gold tinted",
+]
+
+_HAIR_STYLES = [
+    "long straight silky", "long wavy beachy", "long loose curls",
+    "long layered with curtain bangs", "long with side-swept bangs",
+    "medium length bob", "medium wavy shoulder-length",
+    "medium layered with wispy bangs", "long braided",
+    "long messy textured", "long sleek blowout", "long tousled waves",
+    "medium length with blunt bangs", "long with soft face-framing layers",
+    "long voluminous bouncy curls", "medium shaggy with layers",
+    "long straight with middle part", "long with loose ringlets",
+]
+
+_EYE_COLORS = [
+    "bright blue", "deep blue", "ice blue", "steel blue",
+    "emerald green", "sage green", "hazel green",
+    "warm brown", "dark brown", "chocolate brown", "amber",
+    "honey brown", "hazel", "gray-blue", "violet-blue",
+    "golden brown", "dark almost-black",
+]
+
+_SKIN_TONES = [
+    "porcelain fair", "ivory", "light with pink undertones",
+    "light with golden undertones", "light olive", "warm beige",
+    "medium olive", "golden tan", "warm caramel", "honey",
+    "medium brown", "deep bronze", "rich dark brown", "ebony",
+    "sun-kissed light", "peachy fair",
+]
+
+_BODY_TYPES = [
+    "slim athletic", "petite toned", "athletic curvy",
+    "slim with long legs", "hourglass athletic",
+    "fit and toned", "naturally curvy", "tall and slender",
+    "petite and slim", "athletic with soft curves",
+    "lean and toned", "voluptuous athletic",
+]
+
+_FACE_SHAPES = [
+    "oval with high cheekbones", "heart-shaped with delicate chin",
+    "round with soft features", "diamond with defined jawline",
+    "oval with defined cheekbones and soft jaw",
+    "square with feminine jawline", "long with elegant proportions",
+    "round with prominent cheekbones", "heart-shaped with wide forehead",
+]
+
+_NOSE_TYPES = [
+    "small upturned", "straight refined", "button nose",
+    "gently curved", "straight with narrow bridge",
+    "slightly upturned with narrow tip", "roman with soft curve",
+    "petite with rounded tip", "slim and straight",
+]
+
+_LIP_TYPES = [
+    "full natural lips", "plump bow-shaped lips", "medium with defined cupid's bow",
+    "naturally full bottom lip", "symmetrical medium lips",
+    "wide with a slight pout", "delicate thin upper with full lower",
+    "perfectly proportioned full lips", "soft rounded natural lips",
+]
+
+_UNIQUE_FEATURES = [
+    "light freckles across nose and cheeks", "a small beauty mark near left eye",
+    "a subtle dimple on right cheek", "light freckles on cheekbones",
+    "dimples on both cheeks when smiling", "a tiny mole above upper lip",
+    "slightly arched natural eyebrows", "long natural eyelashes",
+    "a faint beauty mark on right cheek", "scattered light freckles",
+    "high arched eyebrows", "naturally thick eyebrows",
+    "a single dimple on left cheek", "light sun freckles across nose",
+    "a beauty mark below left eye", "naturally rosy cheeks",
+]
+
+_STYLE_TAGS_POOL = [
+    "gaming girl", "streamer aesthetic", "e-girl", "soft aesthetic",
+    "dark academia", "streetwear queen", "cozy gamer", "neon vibes",
+    "pastel goth", "minimalist chic", "y2k retro", "cyberpunk",
+    "sporty casual", "vintage gamer", "kawaii", "grunge cute",
+    "tech girl", "ethereal", "bold glam", "urban casual",
+    "indie aesthetic", "clean girl", "cottagecore gamer", "alt girl",
+]
+
+# --- Personality trait pools ---
+_PERSONALITY_ARCHETYPES = [
+    {
+        "name": "The Hype Queen",
+        "tone": "explosive energy, contagious excitement",
+        "speaking_style": "fast-paced, screams at big moments, uses slang and internet culture",
+        "bio_trait": "Lives for the clutch moments. Will literally scream into the void when her favorite player pops off.",
+        "emoji_style": "heavy",
+    },
+    {
+        "name": "The Smooth Analyst",
+        "tone": "calm confidence, analytical with a hint of sass",
+        "speaking_style": "measured and clear, breaks down plays intelligently, occasional dry humor",
+        "bio_trait": "Studies every round like it's a chess match. Knows exactly why that flash was 200 IQ.",
+        "emoji_style": "minimal",
+    },
+    {
+        "name": "The Flirty Gamer",
+        "tone": "playful, flirty, teasing",
+        "speaking_style": "builds FOMO, uses innuendo and charm, keeps viewers hooked",
+        "bio_trait": "Makes you feel like she's talking just to you. Every clip is a personal invitation.",
+        "emoji_style": "heavy",
+    },
+    {
+        "name": "The Chill Bestie",
+        "tone": "relaxed, warm, genuine",
+        "speaking_style": "conversational like a friend on Discord, genuine reactions, relatable",
+        "bio_trait": "Your favorite person to watch CS with at 2am. Reacts exactly how you would.",
+        "emoji_style": "moderate",
+    },
+    {
+        "name": "The Dark Edge",
+        "tone": "intense, brooding, darkly humorous",
+        "speaking_style": "whispers when others shout, silence is her weapon, dark comedy timing",
+        "bio_trait": "Watches chaos unfold with a knowing smirk. Nothing surprises her. Almost nothing.",
+        "emoji_style": "minimal",
+    },
+    {
+        "name": "The Bubbly Sweetheart",
+        "tone": "adorable, sweet, genuinely excited",
+        "speaking_style": "cute reactions, stumbles over words when excited, genuine gasps and squeals",
+        "bio_trait": "Gets genuinely shocked by every play. Her gasps are real. Her squeals are involuntary.",
+        "emoji_style": "heavy",
+    },
+    {
+        "name": "The Savage Queen",
+        "tone": "sharp, witty, unapologetically savage",
+        "speaking_style": "roasts bad plays, celebrates good ones, no filter commentary",
+        "bio_trait": "Will tell you exactly what went wrong and make it entertaining. No mercy.",
+        "emoji_style": "moderate",
+    },
+    {
+        "name": "The Dramatic Narrator",
+        "tone": "theatrical, epic, storytelling",
+        "speaking_style": "narrates moments like a movie, builds suspense, dramatic pauses",
+        "bio_trait": "Turns every round into an epic saga. The hero's journey happens every match.",
+        "emoji_style": "moderate",
+    },
+]
+
+_REACTION_POOLS = {
+    "excited": [
+        "OH MY GOD!", "NO WAY!", "INSANE!", "Let's GOOO!", "WHAT?!",
+        "That was CRAZY!", "I'm SHAKING!", "Absolutely UNREAL!",
+        "Did that just HAPPEN?!", "I can't BREATHE!",
+    ],
+    "calm": [
+        "Nice play.", "Clean.", "Solid execution.", "Well played.",
+        "Smart positioning.", "Beautiful read.", "Textbook.",
+        "That's how it's done.", "Efficient.", "Crisp.",
+    ],
+    "playful": [
+        "Oh babe!", "That's so hot!", "Come on!", "Show me more!",
+        "Don't stop!", "I'm obsessed!", "Ugh, SO good!",
+        "You seeing this?!", "I literally can't!", "Screaming!",
+    ],
+    "dark": [
+        "Pathetic.", "Get destroyed.", "Too easy.", "Next.",
+        "...yeah.", "Devastating.", "Cold.", "Brutal.",
+        "That was ugly. I love it.", "Rest in peace.",
+    ],
+    "sweet": [
+        "Oh my gosh!", "That's so cool!", "Yay!", "Aww amazing!",
+        "I love it!", "Wow wow wow!", "So good!",
+        "That was beautiful!", "I'm so happy!", "Incredible!",
+    ],
+}
+
+_CATCHPHRASE_POOLS = {
+    "excited": [
+        "That was absolutely INSANE!", "Did you SEE that?!",
+        "I'm literally losing my mind!", "This is why I love CS!",
+        "Someone clip that RIGHT NOW!", "My heart is RACING!",
+    ],
+    "calm": [
+        "Let me break this down for you.", "Watch the crosshair placement.",
+        "This is textbook CS.", "Pay attention to the timing.",
+        "And that's why positioning matters.", "Notice the game sense.",
+    ],
+    "playful": [
+        "You NEED to see this live.", "Come watch with me, you won't regret it.",
+        "This player makes me feel things.", "I'm blushing right now.",
+        "If you're not watching, you're missing out.", "That was personal.",
+    ],
+    "dark": [
+        "And just like that... it's over.", "They never stood a chance.",
+        "Welcome to the highlight reel of your failures.",
+        "Silence before the storm.", "Cold. Calculated. Perfect.",
+        "That was... almost beautiful in its cruelty.",
+    ],
+    "sweet": [
+        "I knew he could do it!", "That made my whole day!",
+        "This is the best thing I've seen all week!",
+        "I'm literally smiling so hard right now!",
+        "Everyone needs to see this!", "My heart is so full!",
+    ],
+}
+
+# --- ElevenLabs voice mapping (for random assignment) ---
+_ELEVENLABS_VOICES = [
+    {"name": "Jessica", "persona_id": "jessica_fire", "vibe": "energetic, expressive"},
+    {"name": "Lily", "persona_id": "sofia_smooth", "vibe": "sultry, confident"},
+    {"name": "Laura", "persona_id": "mia_cute", "vibe": "sweet, bubbly"},
+    {"name": "Sarah", "persona_id": "alex_edgy", "vibe": "intense, edgy"},
+]
+
+# --- Name generation pools ---
+_FIRST_NAMES = [
+    "Luna", "Aria", "Nova", "Zara", "Mika", "Suki", "Raven", "Ivy",
+    "Cleo", "Jade", "Nyx", "Sage", "Viper", "Echo", "Blaze", "Frost",
+    "Kira", "Yuki", "Lola", "Nika", "Stella", "Aurora", "Maya", "Zoe",
+    "Ruby", "Lyra", "Iris", "Vera", "Demi", "Tessa", "Alina", "Nadia",
+    "Sasha", "Mira", "Elara", "Anya", "Lena", "Kai", "Rio", "Skye",
+    "Violet", "Ember", "Willow", "Storm", "Coral", "Pearl", "Roxy", "Pixie",
+]
+
+_LAST_NAMES_OR_TAGS = [
+    "Storm", "Fox", "Wolf", "Star", "Flame", "Ice", "Shadow", "Light",
+    "Volt", "Neon", "Pixel", "Byte", "Glitch", "Vex", "Hex", "Arc",
+    "Blaze", "Frost", "Dawn", "Dusk", "Vibe", "Wave", "Nova", "Zen",
+    "Wild", "Edge", "Core", "Rush", "Flash", "Spark", "Luna", "Sol",
+]
+
+
+def generate_unique_persona(name: str | None = None) -> dict:
+    """Generate a COMPLETELY UNIQUE AI girl persona.
+
+    Every trait is randomly selected from rich pools, ensuring no two girls
+    are ever the same. Returns a full persona dict with:
+    - appearance (unique facial features, body, hair, eyes, skin)
+    - personality (archetype, tone, reactions, catchphrases)
+    - voice_config (ElevenLabs voice + randomized settings)
+    - identity_seed (unique hash for reproducibility)
+    - bio (auto-generated character description)
+    """
+    # Generate unique identity seed
+    seed_str = f"{datetime.utcnow().isoformat()}-{random.random()}"
+    identity_seed = hashlib.md5(seed_str.encode()).hexdigest()[:12]
+
+    # --- Generate name if not provided ---
+    if not name:
+        name = f"{random.choice(_FIRST_NAMES)} {random.choice(_LAST_NAMES_OR_TAGS)}"
+
+    # --- UNIQUE APPEARANCE ---
+    ethnicity = random.choice(_ETHNICITIES)
+    hair_color = random.choice(_HAIR_COLORS)
+    hair_style = random.choice(_HAIR_STYLES)
+    eye_color = random.choice(_EYE_COLORS)
+    skin_tone = random.choice(_SKIN_TONES)
+    body_type = random.choice(_BODY_TYPES)
+    face_shape = random.choice(_FACE_SHAPES)
+    nose = random.choice(_NOSE_TYPES)
+    lips = random.choice(_LIP_TYPES)
+    unique_feature = random.choice(_UNIQUE_FEATURES)
+    age = random.randint(19, 28)
+    style_tags = random.sample(_STYLE_TAGS_POOL, k=min(3, len(_STYLE_TAGS_POOL)))
+
+    appearance = {
+        "ethnicity": ethnicity,
+        "hair_color": hair_color,
+        "hair_style": hair_style,
+        "eye_color": eye_color,
+        "skin_tone": skin_tone,
+        "body_type": body_type,
+        "face_shape": face_shape,
+        "nose": nose,
+        "lips": lips,
+        "unique_feature": unique_feature,
+        "age": age,
+        "age_range": f"{age}-{age+2}",
+        "style_tags": style_tags,
+    }
+
+    # --- UNIQUE PERSONALITY ---
+    archetype = random.choice(_PERSONALITY_ARCHETYPES)
+
+    # Pick reaction/catchphrase pools based on archetype tone
+    if "energy" in archetype["tone"] or "explosive" in archetype["tone"]:
+        reaction_key = "excited"
+    elif "calm" in archetype["tone"] or "analytical" in archetype["tone"]:
+        reaction_key = "calm"
+    elif "flirty" in archetype["tone"] or "playful" in archetype["tone"]:
+        reaction_key = "playful"
+    elif "dark" in archetype["tone"] or "intense" in archetype["tone"]:
+        reaction_key = "dark"
+    else:
+        reaction_key = "sweet"
+
+    # Sample unique subset of reactions and catchphrases
+    all_reactions = _REACTION_POOLS[reaction_key]
+    all_catchphrases = _CATCHPHRASE_POOLS[reaction_key]
+    reactions = random.sample(all_reactions, k=min(5, len(all_reactions)))
+    catchphrases = random.sample(all_catchphrases, k=min(3, len(all_catchphrases)))
+
+    personality = {
+        "archetype": archetype["name"],
+        "tone": archetype["tone"],
+        "speaking_style": archetype["speaking_style"],
+        "bio_trait": archetype["bio_trait"],
+        "reactions": reactions,
+        "catchphrases": catchphrases,
+        "language": "en",
+        "emoji_style": archetype["emoji_style"],
+        "reaction_pool_key": reaction_key,
+    }
+
+    # --- UNIQUE VOICE ---
+    voice_pick = random.choice(_ELEVENLABS_VOICES)
+    # Randomize voice settings within realistic ranges
+    stability = round(random.uniform(0.15, 0.40), 2)
+    similarity_boost = round(random.uniform(0.70, 0.88), 2)
+    style_val = round(random.uniform(0.60, 0.90), 2)
+    speed = round(random.uniform(0.88, 1.08), 2)
+
+    voice_config = {
+        "pitch": random.choice(["low", "medium-low", "medium", "medium-high", "high"]),
+        "speed": random.choice(["slow", "medium", "fast"]),
+        "emotion": random.choice(["excited", "warm", "playful", "intense", "sweet", "confident"]),
+        "accent": random.choice(["american", "british", "neutral", "slight-accent"]),
+        "tts_model": "eleven_v3",
+        "persona_id": voice_pick["persona_id"],
+        "elevenlabs_voice_name": voice_pick["name"],
+        "style_guide": archetype["speaking_style"],
+        "elevenlabs_settings": {
+            "stability": stability,
+            "similarity_boost": similarity_boost,
+            "style": style_val,
+            "use_speaker_boost": True,
+            "speed": speed,
+        },
+    }
+
+    # --- AUTO-GENERATED BIO ---
+    bio = (
+        f"{name} is a {age}-year-old {ethnicity} girl with {hair_color} {hair_style} hair, "
+        f"{eye_color} eyes, and {skin_tone} skin. She has a {face_shape} face, "
+        f"{nose}, and {lips}. {unique_feature.capitalize()}. "
+        f"{archetype['bio_trait']} "
+        f"Her vibe: {', '.join(style_tags)}."
+    )
+
+    return {
+        "name": name,
+        "identity_seed": identity_seed,
+        "appearance": appearance,
+        "personality": personality,
+        "voice_config": voice_config,
+        "bio": bio,
+        "archetype_name": archetype["name"],
+        "voice_persona_id": voice_pick["persona_id"],
+        "elevenlabs_voice_name": voice_pick["name"],
+    }
 
 
 def generate_profile_config(

@@ -16,12 +16,13 @@ import {
   GalleryPhoto,
   VoiceIdentity,
   ProfileLearningResponse,
+  GeneratedPersona,
 } from "@/hooks/useApi";
 import {
   Plus, Sparkles, Trash2, Mic, Video, Image, Brain, Share2,
   DollarSign, Play, Eye, RefreshCw, Send, Zap,
   Volume2, FileText, ChevronRight, Hash, Clock, BarChart3,
-  Camera, Download, Star,
+  Camera, Download, Star, Dice5, Loader2, User,
 } from "lucide-react";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
@@ -104,6 +105,12 @@ export default function AIProfilesPage() {
     telegram_channel: "",
   });
 
+  // Smart persona generation state
+  const [personaPreview, setPersonaPreview] = useState<GeneratedPersona | null>(null);
+  const [personaLoading, setPersonaLoading] = useState(false);
+  const [createLoading, setCreateLoading] = useState(false);
+  const [createMode, setCreateMode] = useState<"smart" | "manual">("smart");
+
   useEffect(() => {
     api.getProfiles().then(setProfiles).catch(() => {});
     api.getProfilePresets().then(setPresets).catch(() => {});
@@ -140,22 +147,55 @@ export default function AIProfilesPage() {
     if (selected) loadTabData(t, selected.id);
   };
 
-  const handleCreate = async () => {
+  const handleGeneratePersona = async () => {
+    setPersonaLoading(true);
     try {
-      const p = await api.createProfile({
-        name: form.name,
-        style: form.style,
-        description: form.description || undefined,
-        appearance_preset: form.appearance_preset,
-        personality_preset: form.personality_preset,
-        voice_preset: form.voice_preset,
-        voice_persona: form.voice_persona,
-        instagram_handle: form.instagram_handle || undefined,
-        tiktok_handle: form.tiktok_handle || undefined,
-        telegram_channel: form.telegram_channel || undefined,
-      });
-      setProfiles([p, ...profiles]);
+      const persona = await api.generatePersona(form.name || undefined);
+      setPersonaPreview(persona);
+    } catch (e) {
+      alert("Ошибка генерации персоны: " + e);
+    } finally {
+      setPersonaLoading(false);
+    }
+  };
+
+  const handleCreate = async () => {
+    setCreateLoading(true);
+    try {
+      if (createMode === "smart") {
+        // Smart auto-generation
+        const p = await api.createProfile({
+          name: form.name || undefined,
+          auto_generate: true,
+          auto_generate_photo: true,
+          style: "realistic",
+          description: form.description || undefined,
+          instagram_handle: form.instagram_handle || undefined,
+          tiktok_handle: form.tiktok_handle || undefined,
+          telegram_channel: form.telegram_channel || undefined,
+        });
+        setProfiles([p, ...profiles]);
+        selectProfile(p);
+      } else {
+        // Manual preset-based
+        const p = await api.createProfile({
+          name: form.name,
+          auto_generate: false,
+          style: form.style,
+          description: form.description || undefined,
+          appearance_preset: form.appearance_preset,
+          personality_preset: form.personality_preset,
+          voice_preset: form.voice_preset,
+          voice_persona: form.voice_persona,
+          instagram_handle: form.instagram_handle || undefined,
+          tiktok_handle: form.tiktok_handle || undefined,
+          telegram_channel: form.telegram_channel || undefined,
+        });
+        setProfiles([p, ...profiles]);
+        selectProfile(p);
+      }
       setShowCreate(false);
+      setPersonaPreview(null);
       setForm({
         name: "", style: "realistic", description: "",
         appearance_preset: "realistic_european", personality_preset: "energetic_gamer",
@@ -163,7 +203,9 @@ export default function AIProfilesPage() {
         instagram_handle: "", tiktok_handle: "", telegram_channel: "",
       });
     } catch (e) {
-      alert("Error: " + e);
+      alert("Ошибка создания: " + e);
+    } finally {
+      setCreateLoading(false);
     }
   };
 
@@ -301,87 +343,224 @@ export default function AIProfilesPage() {
 
       {showCreate && (
         <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 space-y-4">
-          <h3 className="text-lg font-semibold text-pink-400">Создать AI девушку</h3>
-          <div className="grid grid-cols-3 gap-4">
-            <div>
-              <label className="block text-xs text-zinc-400 mb-1">Имя</label>
-              <input
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
-                placeholder="Jessica Fire"
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-zinc-400 mb-1">Голосовая персона</label>
-              <select
-                value={form.voice_persona}
-                onChange={(e) => setForm({ ...form, voice_persona: e.target.value })}
-                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+          <div className="flex items-center justify-between">
+            <h3 className="text-lg font-semibold text-pink-400">Создать AI девушку</h3>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setCreateMode("smart")}
+                className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+                  createMode === "smart" ? "bg-pink-600 text-white" : "bg-zinc-800 text-zinc-400 hover:text-white"
+                }`}
               >
-                <option value="jessica_fire">Jessica Fire</option>
-                <option value="sofia_smooth">Sofia Smooth</option>
-                <option value="mia_cute">Mia Cute</option>
-                <option value="alex_edgy">Alex Edgy</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs text-zinc-400 mb-1">Стиль</label>
-              <select
-                value={form.style}
-                onChange={(e) => setForm({ ...form, style: e.target.value })}
-                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                <Dice5 className="h-3 w-3 inline mr-1" /> Умная генерация
+              </button>
+              <button
+                onClick={() => setCreateMode("manual")}
+                className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+                  createMode === "manual" ? "bg-pink-600 text-white" : "bg-zinc-800 text-zinc-400 hover:text-white"
+                }`}
               >
-                <option value="realistic">Реалистичный</option>
-                <option value="anime">Аниме</option>
-                <option value="semi-realistic">Полуреалистичный</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs text-zinc-400 mb-1">Instagram</label>
-              <input
-                value={form.instagram_handle}
-                onChange={(e) => setForm({ ...form, instagram_handle: e.target.value })}
-                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
-                placeholder="@jessica_gaming"
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-zinc-400 mb-1">TikTok</label>
-              <input
-                value={form.tiktok_handle}
-                onChange={(e) => setForm({ ...form, tiktok_handle: e.target.value })}
-                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
-                placeholder="@jessica_ttk"
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-zinc-400 mb-1">Telegram</label>
-              <input
-                value={form.telegram_channel}
-                onChange={(e) => setForm({ ...form, telegram_channel: e.target.value })}
-                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
-                placeholder="@jessica_private"
-              />
+                <User className="h-3 w-3 inline mr-1" /> Вручную
+              </button>
             </div>
           </div>
-          <div>
-            <label className="block text-xs text-zinc-400 mb-1">Описание</label>
-            <textarea
-              value={form.description}
-              onChange={(e) => setForm({ ...form, description: e.target.value })}
-              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
-              rows={2}
-              placeholder="Описание персонажа..."
-            />
-          </div>
-          <button
-            onClick={handleCreate}
-            disabled={!form.name}
-            className="bg-pink-600 hover:bg-pink-700 disabled:opacity-50 px-6 py-2 rounded-lg text-sm font-medium transition-colors"
-          >
-            Создать профиль
-          </button>
+
+          {createMode === "smart" ? (
+            <div className="space-y-4">
+              <div className="bg-gradient-to-r from-pink-500/10 to-violet-500/10 border border-pink-500/20 rounded-lg p-4">
+                <p className="text-sm text-zinc-300">
+                  Система автоматически сгенерирует <span className="text-pink-400 font-semibold">уникальную</span> девушку
+                  с неповторимой внешностью, характером и голосом. Каждая девушка — полностью уникальна.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1">Имя (опционально)</label>
+                  <input
+                    value={form.name}
+                    onChange={(e) => setForm({ ...form, name: e.target.value })}
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                    placeholder="Оставь пустым — сгенерируется автоматически"
+                  />
+                </div>
+                <div className="flex items-end">
+                  <button
+                    onClick={handleGeneratePersona}
+                    disabled={personaLoading}
+                    className="flex items-center gap-2 bg-violet-600 hover:bg-violet-700 disabled:opacity-50 px-4 py-2 rounded-lg text-sm font-medium transition-colors w-full justify-center"
+                  >
+                    {personaLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Dice5 className="h-4 w-4" />}
+                    Превью персоны
+                  </button>
+                </div>
+              </div>
+
+              {personaPreview && (
+                <div className="bg-zinc-800/50 border border-zinc-700 rounded-lg p-4 space-y-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-full bg-gradient-to-br from-pink-500 to-violet-500 flex items-center justify-center text-lg font-bold">
+                      {personaPreview.name[0]}
+                    </div>
+                    <div>
+                      <div className="font-semibold text-pink-400">{personaPreview.name}</div>
+                      <div className="text-xs text-zinc-500">Архетип: {personaPreview.archetype_name} | Голос: {personaPreview.elevenlabs_voice_name}</div>
+                    </div>
+                  </div>
+                  <p className="text-xs text-zinc-400 leading-relaxed">{personaPreview.bio}</p>
+                  <div className="grid grid-cols-3 gap-2 text-[10px]">
+                    <div className="bg-zinc-900 rounded p-2">
+                      <div className="text-zinc-500 mb-1">Внешность</div>
+                      <div className="text-zinc-300">{personaPreview.appearance.ethnicity}, {personaPreview.appearance.hair_color} {personaPreview.appearance.hair_style}</div>
+                      <div className="text-zinc-300">{personaPreview.appearance.eye_color} глаза, {personaPreview.appearance.skin_tone}</div>
+                      <div className="text-zinc-400 mt-1">{personaPreview.appearance.unique_feature}</div>
+                    </div>
+                    <div className="bg-zinc-900 rounded p-2">
+                      <div className="text-zinc-500 mb-1">Характер</div>
+                      <div className="text-zinc-300">{personaPreview.personality.tone}</div>
+                      <div className="text-zinc-400 mt-1">{personaPreview.personality.catchphrases?.slice(0, 2).join(", ")}</div>
+                    </div>
+                    <div className="bg-zinc-900 rounded p-2">
+                      <div className="text-zinc-500 mb-1">Стиль</div>
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {personaPreview.appearance.style_tags?.map((tag) => (
+                          <span key={tag} className="bg-pink-500/20 text-pink-400 px-1.5 py-0.5 rounded text-[9px]">{tag}</span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1">Instagram</label>
+                  <input
+                    value={form.instagram_handle}
+                    onChange={(e) => setForm({ ...form, instagram_handle: e.target.value })}
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                    placeholder="@handle"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1">TikTok</label>
+                  <input
+                    value={form.tiktok_handle}
+                    onChange={(e) => setForm({ ...form, tiktok_handle: e.target.value })}
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                    placeholder="@handle"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1">Telegram</label>
+                  <input
+                    value={form.telegram_channel}
+                    onChange={(e) => setForm({ ...form, telegram_channel: e.target.value })}
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                    placeholder="@channel"
+                  />
+                </div>
+              </div>
+
+              <button
+                onClick={handleCreate}
+                disabled={createLoading}
+                className="flex items-center gap-2 bg-pink-600 hover:bg-pink-700 disabled:opacity-50 px-6 py-2.5 rounded-lg text-sm font-semibold transition-colors"
+              >
+                {createLoading ? (
+                  <><Loader2 className="h-4 w-4 animate-spin" /> Генерация уникальной девушки + фото...</>
+                ) : (
+                  <><Sparkles className="h-4 w-4" /> Создать уникальную девушку</>
+                )}
+              </button>
+              {createLoading && (
+                <p className="text-xs text-zinc-500">Генерируем персону + первое фото... ~15-30 сек</p>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1">Имя</label>
+                  <input
+                    value={form.name}
+                    onChange={(e) => setForm({ ...form, name: e.target.value })}
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                    placeholder="Jessica Fire"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1">Голосовая персона</label>
+                  <select
+                    value={form.voice_persona}
+                    onChange={(e) => setForm({ ...form, voice_persona: e.target.value })}
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                  >
+                    <option value="jessica_fire">Jessica Fire</option>
+                    <option value="sofia_smooth">Sofia Smooth</option>
+                    <option value="mia_cute">Mia Cute</option>
+                    <option value="alex_edgy">Alex Edgy</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1">Стиль</label>
+                  <select
+                    value={form.style}
+                    onChange={(e) => setForm({ ...form, style: e.target.value })}
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                  >
+                    <option value="realistic">Реалистичный</option>
+                    <option value="anime">Аниме</option>
+                    <option value="semi-realistic">Полуреалистичный</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1">Instagram</label>
+                  <input
+                    value={form.instagram_handle}
+                    onChange={(e) => setForm({ ...form, instagram_handle: e.target.value })}
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                    placeholder="@jessica_gaming"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1">TikTok</label>
+                  <input
+                    value={form.tiktok_handle}
+                    onChange={(e) => setForm({ ...form, tiktok_handle: e.target.value })}
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                    placeholder="@jessica_ttk"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1">Telegram</label>
+                  <input
+                    value={form.telegram_channel}
+                    onChange={(e) => setForm({ ...form, telegram_channel: e.target.value })}
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                    placeholder="@jessica_private"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs text-zinc-400 mb-1">Описание</label>
+                <textarea
+                  value={form.description}
+                  onChange={(e) => setForm({ ...form, description: e.target.value })}
+                  className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                  rows={2}
+                  placeholder="Описание персонажа..."
+                />
+              </div>
+              <button
+                onClick={handleCreate}
+                disabled={!form.name || createLoading}
+                className="bg-pink-600 hover:bg-pink-700 disabled:opacity-50 px-6 py-2 rounded-lg text-sm font-medium transition-colors"
+              >
+                {createLoading ? "Создание..." : "Создать профиль"}
+              </button>
+            </div>
+          )}
         </div>
       )}
 

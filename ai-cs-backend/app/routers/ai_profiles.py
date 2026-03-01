@@ -24,6 +24,7 @@ from app.services.ai_profile_generator import (
     generate_image_prompt,
     generate_voice_script,
     estimate_generation_cost,
+    generate_unique_persona,
     APPEARANCE_PRESETS,
     PERSONALITY_PRESETS,
     VOICE_PRESETS,
@@ -65,9 +66,11 @@ def _parse_profile(row: aiosqlite.Row) -> dict:
 
 # ─── Request Schemas ─────────────────────────────────────────────────
 class ProfileCreateRequest(BaseModel):
-    name: str
+    name: Optional[str] = None  # Optional — auto-generated if not provided
     style: str = "realistic"
     description: Optional[str] = None
+    auto_generate: bool = True  # NEW: auto-generate unique persona
+    auto_generate_photo: bool = True  # NEW: auto-gen first identity photo on creation
     appearance_preset: str = "realistic_european"
     personality_preset: str = "energetic_gamer"
     voice_preset: str = "energetic_female"
@@ -195,44 +198,109 @@ async def list_profiles(db: aiosqlite.Connection = Depends(get_db)):
     return [_parse_profile(row) for row in rows]
 
 
+@router.post("/generate-persona")
+async def generate_persona_preview(data: dict | None = None):
+    """Generate a random unique persona preview (no DB save).
+
+    Call this to show the user a preview of the auto-generated girl
+    before they confirm creation. Returns full persona details.
+    """
+    name = (data or {}).get("name")
+    persona = generate_unique_persona(name=name)
+    return persona
+
+
 @router.post("/")
 async def create_profile(
     data: ProfileCreateRequest,
     db: aiosqlite.Connection = Depends(get_db),
 ):
-    config = generate_profile_config(
-        name=data.name,
-        appearance_preset=data.appearance_preset,
-        personality_preset=data.personality_preset,
-        voice_preset=data.voice_preset,
-        custom_appearance=data.custom_appearance,
-        custom_personality=data.custom_personality,
-        custom_voice=data.custom_voice,
-    )
+    """Create a new AI girl profile.
 
-    # Enrich voice_config with persona info
-    voice_config = config["voice_config"]
-    persona = VOICE_PERSONAS.get(data.voice_persona, VOICE_PERSONAS["jessica_fire"])
-    voice_config["persona_id"] = data.voice_persona
-    voice_config["elevenlabs_voice_name"] = persona["elevenlabs_voice"]
-    voice_config["style_guide"] = persona["style_guide"]
+    If auto_generate=True (default), generates a unique persona with
+    randomized appearance, personality, and voice. Each girl is truly unique.
+    If auto_generate=False, uses legacy preset-based config.
+    """
+    if data.auto_generate:
+        # ═══ SMART UNIQUE PERSONA GENERATION ═══
+        persona_data = generate_unique_persona(name=data.name)
+        profile_name = persona_data["name"]
+        appearance = persona_data["appearance"]
+        personality = persona_data["personality"]
+        voice_config = persona_data["voice_config"]
+        bio = persona_data["bio"]
+        voice_persona_id = persona_data["voice_persona_id"]
 
-    memory = {
-        "personality_notes": f"AI girl: {data.name}. Persona: {persona['name']}. {persona['description']}",
-        "content_count": 0,
-        "favorite_tags": persona["signature_tags"],
-        "audience_insights": {},
-        "performance_history": [],
-    }
+        # Get ElevenLabs persona for audio tags
+        el_persona = VOICE_PERSONAS.get(voice_persona_id, VOICE_PERSONAS["jessica_fire"])
 
-    content_style = {
-        "photo_style": config["appearance"].get("style", "realistic"),
-        "video_format": "vertical_9_16",
-        "caption_language": "en",
-        "emoji_usage": "moderate",
-        "hashtag_strategy": "trending_mix",
-    }
+        # Voice settings from the unique generator
+        elevenlabs_settings = voice_config.get("elevenlabs_settings", el_persona["default_settings"])
+        audio_tags = el_persona.get("signature_tags", [])
 
+        memory = {
+            "personality_notes": bio,
+            "archetype": personality.get("archetype", ""),
+            "identity_seed": persona_data.get("identity_seed", ""),
+            "content_count": 0,
+            "favorite_tags": audio_tags,
+            "audience_insights": {},
+            "performance_history": [],
+        }
+
+        content_style = {
+            "photo_style": "realistic",
+            "video_format": "vertical_9_16",
+            "caption_language": "en",
+            "emoji_usage": personality.get("emoji_style", "moderate"),
+            "hashtag_strategy": "trending_mix",
+        }
+
+        description = data.description or bio
+
+    else:
+        # ═══ LEGACY PRESET-BASED CREATION ═══
+        config = generate_profile_config(
+            name=data.name or "AI Girl",
+            appearance_preset=data.appearance_preset,
+            personality_preset=data.personality_preset,
+            voice_preset=data.voice_preset,
+            custom_appearance=data.custom_appearance,
+            custom_personality=data.custom_personality,
+            custom_voice=data.custom_voice,
+        )
+        profile_name = data.name or "AI Girl"
+        appearance = config["appearance"]
+        personality = config["personality"]
+        voice_config = config["voice_config"]
+
+        el_persona = VOICE_PERSONAS.get(data.voice_persona, VOICE_PERSONAS["jessica_fire"])
+        voice_config["persona_id"] = data.voice_persona
+        voice_config["elevenlabs_voice_name"] = el_persona["elevenlabs_voice"]
+        voice_config["style_guide"] = el_persona["style_guide"]
+
+        elevenlabs_settings = el_persona["default_settings"]
+        audio_tags = el_persona["signature_tags"]
+
+        memory = {
+            "personality_notes": f"AI girl: {profile_name}. Persona: {el_persona['name']}. {el_persona['description']}",
+            "content_count": 0,
+            "favorite_tags": audio_tags,
+            "audience_insights": {},
+            "performance_history": [],
+        }
+
+        content_style = {
+            "photo_style": appearance.get("style", "realistic"),
+            "video_format": "vertical_9_16",
+            "caption_language": "en",
+            "emoji_usage": "moderate",
+            "hashtag_strategy": "trending_mix",
+        }
+
+        description = data.description or f"AI girl: {profile_name} — {el_persona['description']}"
+
+    # ═══ INSERT INTO DB ═══
     cursor = await db.execute(
         """INSERT INTO ai_profiles (
             name, style, description, appearance, voice_config, personality,
@@ -241,20 +309,68 @@ async def create_profile(
             memory, content_style, social_config
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
-            data.name, data.style,
-            data.description or f"AI girl: {data.name} — {persona['description']}",
-            json.dumps(config["appearance"]), json.dumps(voice_config), json.dumps(config["personality"]),
+            profile_name, data.style,
+            description,
+            json.dumps(appearance), json.dumps(voice_config), json.dumps(personality),
             data.instagram_handle, data.tiktok_handle, data.telegram_channel,
-            json.dumps(persona["default_settings"]), json.dumps(persona["signature_tags"]),
+            json.dumps(elevenlabs_settings), json.dumps(audio_tags),
             json.dumps(memory), json.dumps(content_style),
             json.dumps({"posting_schedule": {"instagram": "10:00,14:00,19:00", "tiktok": "12:00,17:00,21:00"}}),
         ),
     )
     await db.commit()
+    profile_id = cursor.lastrowid
 
-    cursor2 = await db.execute("SELECT * FROM ai_profiles WHERE id = ?", (cursor.lastrowid,))
+    # ═══ AUTO-GENERATE FIRST IDENTITY PHOTO ═══
+    first_photo_url = None
+    if data.auto_generate_photo:
+        try:
+            from app.services.content_generation import generate_photo as fal_generate_photo
+
+            # Build identity prompt from unique appearance
+            photo_prompt = generate_image_prompt(
+                {"appearance": appearance, "personality": personality},
+                content_type="professional_portrait",
+            )
+            photo_result = await fal_generate_photo(
+                prompt=photo_prompt,
+                width=1024,
+                height=1024,
+                num_images=1,
+                model_key="flux2_realism",
+            )
+            if photo_result.get("success"):
+                images = photo_result.get("images", [])
+                if images:
+                    first_photo_url = images[0].get("url", "")
+                    if first_photo_url:
+                        # Save as reference image
+                        await db.execute(
+                            "UPDATE ai_profiles SET reference_images = ? WHERE id = ?",
+                            (json.dumps([first_photo_url]), profile_id),
+                        )
+                        # Save to gallery as reference
+                        await db.execute(
+                            """INSERT INTO profile_gallery (profile_id, image_url, content_type, prompt, model_key, is_reference, cost)
+                               VALUES (?, ?, 'identity_portrait', ?, 'flux2_realism', 1, ?)""",
+                            (profile_id, first_photo_url, photo_prompt, photo_result.get("cost_estimate", 0.025)),
+                        )
+                        # Update photo count
+                        await db.execute(
+                            "UPDATE ai_profiles SET total_photos = 1, total_cost = ? WHERE id = ?",
+                            (photo_result.get("cost_estimate", 0.025), profile_id),
+                        )
+                        await db.commit()
+        except Exception as e:
+            # Photo generation is best-effort; don't fail profile creation
+            import logging
+            logging.warning(f"Auto-photo generation failed for profile {profile_id}: {e}")
+
+    cursor2 = await db.execute("SELECT * FROM ai_profiles WHERE id = ?", (profile_id,))
     row = await cursor2.fetchone()
-    return _parse_profile(row)
+    result = _parse_profile(row)
+    result["auto_generated_photo"] = first_photo_url
+    return result
 
 
 @router.get("/{profile_id}")
