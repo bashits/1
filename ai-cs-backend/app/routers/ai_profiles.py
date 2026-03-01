@@ -214,6 +214,47 @@ async def set_elevenlabs_key(
     return {"success": True, "message": "ElevenLabs API key saved"}
 
 
+# ─── Pricing & Cost Estimates (MUST be before /{profile_id} routes) ───
+
+@router.get("/cost-estimates/{task_type}")
+async def get_cost_estimate(task_type: str):
+    costs = estimate_generation_cost(task_type)
+    if not costs:
+        raise HTTPException(status_code=404, detail=f"Unknown task type: {task_type}")
+    return {"task_type": task_type, "estimates": costs}
+
+
+@router.get("/pricing")
+async def get_pricing():
+    """Pricing & allowed durations for frontend real-time cost calculator."""
+    return get_all_pricing()
+
+
+@router.get("/video-cost-estimate")
+async def get_video_cost_estimate(
+    duration_seconds: float = Query(default=3.0, ge=1.0, le=60.0),
+    lipsync_model_key: str = "kling_avatar",
+    include_i2v: bool = False,
+    i2v_model_key: str = "kling",
+    voice_engine: str = "elevenlabs",
+):
+    # Validate against our discrete UI options
+    allowed = set(VIDEO_DURATION_OPTIONS)
+    if int(duration_seconds) not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid duration_seconds={duration_seconds}. Allowed: {sorted(allowed)}",
+        )
+    return calculate_video_cost(
+        duration_seconds=duration_seconds,
+        lipsync_model_key=lipsync_model_key,
+        photo_model_key="lora",
+        include_i2v=include_i2v,
+        i2v_model_key=i2v_model_key,
+        voice_engine=voice_engine,
+    )
+
+
 # ─── Profile CRUD ─────────────────────────────────────────────────────
 
 @router.get("/")
@@ -1024,7 +1065,7 @@ async def get_costs(profile_id: int, db: aiosqlite.Connection = Depends(get_db))
         "total_videos": profile.get("total_videos", 0),
         "total_posts": profile.get("total_posts", 0),
         "breakdown": breakdown,
-        "cost_estimates": {"voice_3s": "$0.003", "photo_1x": "$0.01", "video_3s_lipsync": "$0.03-0.05", "full_reel_15s": "$0.10-0.15"},
+        "cost_estimates": {"voice_3s": "$0.018", "photo_1x": "$0.021-0.04", "video_3s_omnihuman": "$0.48+photo", "video_5s_kling_i2v": "$0.28", "lipsync_5s_kling": "$0.07"},
     }
 
 
@@ -1270,45 +1311,6 @@ async def list_tasks(profile_id: int, db: aiosqlite.Connection = Depends(get_db)
                     d[k] = {}
         result.append(d)
     return result
-
-
-@router.get("/cost-estimates/{task_type}")
-async def get_cost_estimate(task_type: str):
-    costs = estimate_generation_cost(task_type)
-    if not costs:
-        raise HTTPException(status_code=404, detail=f"Unknown task type: {task_type}")
-    return {"task_type": task_type, "estimates": costs}
-
-
-@router.get("/pricing")
-async def get_pricing():
-    """Pricing & allowed durations for frontend real-time cost calculator."""
-    return get_all_pricing()
-
-
-@router.get("/video-cost-estimate")
-async def get_video_cost_estimate(
-    duration_seconds: float = Query(default=3.0, ge=1.0, le=60.0),
-    lipsync_model_key: str = "kling_avatar",
-    include_i2v: bool = False,
-    i2v_model_key: str = "kling",
-    voice_engine: str = "elevenlabs",
-):
-    # Validate against our discrete UI options
-    allowed = set(VIDEO_DURATION_OPTIONS)
-    if int(duration_seconds) not in allowed:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid duration_seconds={duration_seconds}. Allowed: {sorted(allowed)}",
-        )
-    return calculate_video_cost(
-        duration_seconds=duration_seconds,
-        lipsync_model_key=lipsync_model_key,
-        photo_model_key="lora",
-        include_i2v=include_i2v,
-        i2v_model_key=i2v_model_key,
-        voice_engine=voice_engine,
-    )
 
 
 # ─── Profile Gallery (Cloud URLs, no local storage) ──────────────────

@@ -2627,7 +2627,7 @@ def get_montage_status() -> dict:
                 {"name": "edge-tts", "purpose": "AI girl voice (Microsoft TTS)", "status": "installed"},
             ],
             "paid": [
-                {"name": "fal.ai", "purpose": "AI girl lip-sync + photo generation", "cost": "~$0.02-0.04/clip", "required": False},
+                {"name": "fal.ai", "purpose": "AI girl lip-sync + photo generation", "cost": "~$0.07-0.52/clip (Kling $0.07, OmniHuman $0.52)", "required": False},
                 {"name": "Twitch API", "purpose": "Auto-discover top clips from streamers", "cost": "FREE", "required": False},
             ],
         },

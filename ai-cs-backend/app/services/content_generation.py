@@ -17,6 +17,7 @@ Smart features:
 
 import asyncio
 import json
+import math
 import os
 import uuid
 from datetime import datetime
@@ -41,21 +42,27 @@ def _get_fal_key() -> str:
 
 
 # ─── Model Registry ──────────────────────────────────────────────────
+# ─── ACTUAL fal.ai pricing (verified March 2026) ─────────────────────
+# Image models: billed per megapixel (MP). 1024×1024 = ~1MP.
+# Video models: billed per second or per video.
+# Lipsync models: billed per second or flat rate.
+# All prices from official fal.ai model pages.
+
 IMAGE_MODELS = {
     "flux2_realism": {
         "id": "fal-ai/flux-realism",
         "name": "FLUX Realism",
         "quality": 10,
-        "cost_per_image": 0.025,
+        "cost_per_image": 0.021,  # $0.021/MP — private model, same as FLUX 2 LoRA Realism
         "best_for": ["portraits", "photorealism", "humans"],
         "default_steps": 35,
         "default_guidance": 3.5,
     },
     "flux2_pro": {
         "id": "fal-ai/flux-pro/v1.1",
-        "name": "FLUX 2 Pro",
+        "name": "FLUX 1.1 Pro",
         "quality": 10,
-        "cost_per_image": 0.05,
+        "cost_per_image": 0.04,  # $0.04/MP — official fal.ai pricing
         "best_for": ["premium", "commercial", "multi-reference"],
         "supports_reference_images": True,
     },
@@ -63,21 +70,21 @@ IMAGE_MODELS = {
         "id": "fal-ai/flux/dev",
         "name": "FLUX Dev",
         "quality": 8,
-        "cost_per_image": 0.01,
+        "cost_per_image": 0.025,  # $0.025/MP — official fal.ai pricing
         "best_for": ["general", "prototyping"],
     },
     "flux_schnell": {
         "id": "fal-ai/flux/schnell",
         "name": "FLUX Schnell",
         "quality": 7,
-        "cost_per_image": 0.003,
+        "cost_per_image": 0.003,  # $0.003/MP — official fal.ai pricing
         "best_for": ["fast_iteration", "previews"],
     },
     "flux_pro_ultra": {
         "id": "fal-ai/flux-pro/v1.1-ultra",
         "name": "FLUX Pro 1.1 Ultra",
         "quality": 9,
-        "cost_per_image": 0.06,
+        "cost_per_image": 0.06,  # $0.06/image — official fal.ai pricing
         "best_for": ["2K", "ultra_quality"],
     },
 }
@@ -87,38 +94,38 @@ LIPSYNC_MODELS = {
         "id": "fal-ai/bytedance/omnihuman/v1.5",
         "name": "OmniHuman 1.5 (ByteDance)",
         "quality": 10,
-        "cost_per_second": 0.16,
+        "cost_per_second": 0.16,  # $0.16/sec — official fal.ai pricing
         "best_for": ["film_grade", "full_body", "expressions"],
     },
     "kling_avatar": {
         "id": "fal-ai/kling-video/lipsync/audio-to-video",
-        "name": "Kling Avatar v2 LipSync",
+        "name": "Kling LipSync Audio-to-Video",
         "quality": 9,
-        "cost_per_second": 0.08,
+        # Kling LipSync: $0.014/sec, rounds UP to nearest 5s increment
+        # e.g. 3s video billed as 5s = $0.07, 7s billed as 10s = $0.14
+        "cost_per_second": 0.014,
+        "billing_increment": 5,  # rounds up to nearest 5s
         "best_for": ["talking_head", "fast", "natural"],
     },
     "latentsync": {
         "id": "fal-ai/latentsync",
         "name": "LatentSync (Budget)",
         "quality": 6,
-        "cost_per_second": 0.02,
+        # LatentSync: $0.20 flat for videos ≤40s, $0.005/sec for longer
+        "cost_flat_under_40s": 0.20,
+        "cost_per_second_over_40s": 0.005,
         "best_for": ["budget", "quick", "testing"],
-    },
-    "veed": {
-        "id": "veed/lipsync",
-        "name": "VEED Lipsync",
-        "quality": 7,
-        "cost_per_minute": 0.40,
-        "best_for": ["budget", "quick"],
     },
 }
 
 VIDEO_MODELS = {
     "kling": {
         "id": "fal-ai/kling-video/v2.1/standard/image-to-video",
-        "name": "Kling 2.1 I2V",
+        "name": "Kling 2.1 Standard I2V",
         "quality": 9,
-        "cost_per_5s": 0.10,
+        # Kling 2.1 Standard: $0.28 for 5s, +$0.056/extra sec
+        "cost_base_5s": 0.28,
+        "cost_per_extra_second": 0.056,
         "best_for": ["realistic_humans", "movement"],
         "durations": [5, 10],
     },
@@ -126,7 +133,9 @@ VIDEO_MODELS = {
         "id": "fal-ai/wan-i2v",
         "name": "Wan 2.1 I2V",
         "quality": 8,
-        "cost_per_5s": 0.08,
+        # Wan 2.1: $0.20 at 480p, $0.40 at 720p per video (~5s)
+        "cost_per_video_480p": 0.20,
+        "cost_per_video_720p": 0.40,
         "best_for": ["general", "animation"],
         "durations": [5],
     },
@@ -134,6 +143,46 @@ VIDEO_MODELS = {
 
 # ─── Duration options for video generation ────────────────────────────
 VIDEO_DURATION_OPTIONS = [3, 5, 10, 15]
+
+
+def _calc_lipsync_cost(model_key: str, duration_seconds: float) -> float:
+    """Calculate lipsync cost based on actual fal.ai billing rules."""
+    ls_model = LIPSYNC_MODELS.get(model_key, LIPSYNC_MODELS["omnihuman"])
+
+    if model_key == "kling_avatar":
+        # Kling LipSync: $0.014/sec, rounds UP to nearest 5s
+        increment = ls_model.get("billing_increment", 5)
+        billed_seconds = math.ceil(duration_seconds / increment) * increment
+        return round(ls_model["cost_per_second"] * billed_seconds, 4)
+
+    if model_key == "latentsync":
+        # LatentSync: $0.20 flat for ≤40s, $0.005/sec for longer
+        if duration_seconds <= 40:
+            return ls_model.get("cost_flat_under_40s", 0.20)
+        return round(0.20 + ls_model.get("cost_per_second_over_40s", 0.005) * (duration_seconds - 40), 4)
+
+    # OmniHuman and others: simple per-second
+    cost_per_sec = ls_model.get("cost_per_second", 0.0)
+    return round(cost_per_sec * duration_seconds, 4)
+
+
+def _calc_i2v_cost(model_key: str, duration_seconds: float) -> float:
+    """Calculate image-to-video cost based on actual fal.ai billing rules."""
+    model = VIDEO_MODELS.get(model_key, VIDEO_MODELS["kling"])
+
+    if model_key == "kling":
+        # Kling 2.1 Standard: $0.28 for first 5s, +$0.056/extra sec
+        base = model.get("cost_base_5s", 0.28)
+        if duration_seconds <= 5:
+            return base
+        extra = duration_seconds - 5
+        return round(base + model.get("cost_per_extra_second", 0.056) * extra, 4)
+
+    if model_key == "wan21":
+        # Wan 2.1: flat per video, 720p default
+        return model.get("cost_per_video_720p", 0.40)
+
+    return 0.0
 
 
 def calculate_video_cost(
@@ -147,13 +196,14 @@ def calculate_video_cost(
     """Calculate estimated cost for video generation pipeline BEFORE running it.
 
     Returns detailed breakdown so user sees exact cost before spending money.
+    All prices verified against official fal.ai model pages (March 2026).
     """
     # Photo cost (LoRA inference or standard)
     if photo_model_key == "lora":
-        photo_cost = 0.05  # LoRA inference via fal.ai
+        photo_cost = 0.025  # LoRA inference via fal-ai/flux-lora (~$0.025/MP)
     else:
         model = IMAGE_MODELS.get(photo_model_key, IMAGE_MODELS["flux2_realism"])
-        photo_cost = model.get("cost_per_image", 0.025)
+        photo_cost = model.get("cost_per_image", 0.021)
 
     # Voice cost (ElevenLabs or free edge-tts)
     if voice_engine == "elevenlabs":
@@ -163,23 +213,14 @@ def calculate_video_cost(
     else:
         voice_cost = 0.0  # edge-tts is free
 
-    # Lipsync cost
+    # Lipsync cost (using accurate billing rules per model)
+    lipsync_cost = _calc_lipsync_cost(lipsync_model_key, duration_seconds)
     ls_model = LIPSYNC_MODELS.get(lipsync_model_key, LIPSYNC_MODELS["omnihuman"])
-    cost_per_sec = ls_model.get("cost_per_second", 0.0)
-    cost_per_min = ls_model.get("cost_per_minute", 0.0)
-    if cost_per_sec:
-        lipsync_cost = round(cost_per_sec * duration_seconds, 4)
-    elif cost_per_min:
-        lipsync_cost = round(cost_per_min * duration_seconds / 60, 4)
-    else:
-        lipsync_cost = 0.0
 
-    # Optional I2V cost
+    # Optional I2V cost (using accurate billing rules per model)
     i2v_cost = 0.0
     if include_i2v:
-        i2v_model = VIDEO_MODELS.get(i2v_model_key, VIDEO_MODELS["kling"])
-        cost_5s = i2v_model.get("cost_per_5s", 0.10)
-        i2v_cost = round(cost_5s * (duration_seconds / 5.0), 4)
+        i2v_cost = _calc_i2v_cost(i2v_model_key, duration_seconds)
 
     total = round(photo_cost + voice_cost + lipsync_cost + i2v_cost, 4)
 
@@ -191,7 +232,6 @@ def calculate_video_cost(
             "lipsync": {
                 "model": lipsync_model_key,
                 "model_name": ls_model.get("name", lipsync_model_key),
-                "cost_per_second": cost_per_sec,
                 "cost": lipsync_cost,
             },
             "i2v": {"model": i2v_model_key, "cost": i2v_cost, "included": include_i2v},
@@ -202,7 +242,10 @@ def calculate_video_cost(
 
 
 def get_all_pricing() -> dict:
-    """Return full pricing info for all models — used by frontend cost calculator."""
+    """Return full pricing info for all models — used by frontend cost calculator.
+
+    All prices verified against official fal.ai model pages (March 2026).
+    """
     return {
         "duration_options": VIDEO_DURATION_OPTIONS,
         "image_models": {
@@ -210,32 +253,78 @@ def get_all_pricing() -> dict:
             for k, v in IMAGE_MODELS.items()
         },
         "lipsync_models": {
-            k: {
-                "name": v["name"],
-                "cost_per_second": v.get("cost_per_second", 0),
-                "cost_per_minute": v.get("cost_per_minute", 0),
-                "quality": v.get("quality", 5),
-                "best_for": v.get("best_for", []),
-            }
-            for k, v in LIPSYNC_MODELS.items()
-            if k != "veed"  # veed not reliable via fal.ai
+            "omnihuman": {
+                "name": "OmniHuman 1.5 (ByteDance)",
+                "pricing_type": "per_second",
+                "cost_per_second": 0.16,
+                "quality": 10,
+                "best_for": ["film_grade", "full_body", "expressions"],
+                "note": "$0.16/sec of output video",
+            },
+            "kling_avatar": {
+                "name": "Kling LipSync Audio-to-Video",
+                "pricing_type": "per_second_rounded",
+                "cost_per_second": 0.014,
+                "billing_increment": 5,
+                "quality": 9,
+                "best_for": ["talking_head", "fast", "natural"],
+                "note": "$0.014/sec, billed in 5s increments (3s→$0.07)",
+            },
+            "latentsync": {
+                "name": "LatentSync (Budget)",
+                "pricing_type": "flat",
+                "cost_flat_under_40s": 0.20,
+                "cost_per_second_over_40s": 0.005,
+                "quality": 6,
+                "best_for": ["budget", "quick", "testing"],
+                "note": "$0.20 flat for ≤40s, +$0.005/sec after",
+            },
         },
         "video_models": {
-            k: {
-                "name": v["name"],
-                "cost_per_5s": v.get("cost_per_5s", 0),
-                "quality": v.get("quality", 5),
-                "durations": v.get("durations", [5]),
-            }
-            for k, v in VIDEO_MODELS.items()
+            "kling": {
+                "name": "Kling 2.1 Standard I2V",
+                "pricing_type": "base_plus_extra",
+                "cost_base_5s": 0.28,
+                "cost_per_extra_second": 0.056,
+                "quality": 9,
+                "durations": [5, 10],
+                "note": "$0.28 for 5s, +$0.056/extra sec",
+            },
+            "wan21": {
+                "name": "Wan 2.1 I2V",
+                "pricing_type": "per_video",
+                "cost_per_video_480p": 0.20,
+                "cost_per_video_720p": 0.40,
+                "quality": 8,
+                "durations": [5],
+                "note": "$0.20 (480p) / $0.40 (720p) per video",
+            },
         },
         "lora": {
-            "training_cost": 2.50,
-            "inference_cost": 0.05,
+            "training_cost": 2.00,  # $2 per training run (official fal.ai)
+            "inference_cost": 0.025,  # ~$0.025/MP via fal-ai/flux-lora
         },
         "voice": {
             "elevenlabs": {"cost_per_1000_chars": 0.30, "note": "Premium quality"},
             "edge_tts": {"cost": 0.0, "note": "Free, lower quality"},
+        },
+        "cost_examples": {
+            "photo_only": {
+                "description": "1 photo (LoRA)",
+                "cost": 0.025,
+            },
+            "video_3s_omnihuman": {
+                "description": "Photo + 3s OmniHuman lipsync",
+                "cost": round(0.025 + 0.0150 + 0.16 * 3, 4),
+            },
+            "video_5s_kling_lipsync": {
+                "description": "Photo + 5s Kling lipsync",
+                "cost": round(0.025 + 0.0150 + 0.014 * 5, 4),
+            },
+            "video_5s_kling_i2v": {
+                "description": "Photo + 5s Kling I2V",
+                "cost": round(0.025 + 0.28, 4),
+            },
         },
     }
 
@@ -640,7 +729,7 @@ async def generate_photo_with_face(
         }
         if negative_prompt:
             input_data["negative_prompt"] = negative_prompt
-        cost = 0.05
+        cost = 0.04  # FLUX 1.1 Pro: $0.04/MP
     else:
         # IP-Adapter Face ID — budget option
         model_id = "fal-ai/ip-adapter-face-id"
@@ -696,8 +785,8 @@ async def generate_lipsync_video(
 
     Models:
     - omnihuman: OmniHuman 1.5 — film-grade, $0.16/sec
-    - kling_avatar: Kling Avatar v2 — fast, $0.08/sec
-    - veed: VEED — budget, $0.02/3s
+    - kling_avatar: Kling LipSync — $0.014/sec (billed in 5s increments)
+    - latentsync: LatentSync — $0.20 flat for ≤40s
     """
     model_info = LIPSYNC_MODELS.get(model_key, LIPSYNC_MODELS["omnihuman"])
     model_id = model_info["id"]
@@ -745,9 +834,7 @@ async def generate_lipsync_video(
             except Exception as e:
                 saved_file = {"url": video_url, "error": str(e)}
 
-    cost_per_sec = model_info.get("cost_per_second", 0.0)
-    cost_per_min = model_info.get("cost_per_minute", 0.0)
-    cost = (cost_per_sec * duration_seconds) if cost_per_sec else (cost_per_min * duration_seconds / 60)
+    cost = _calc_lipsync_cost(model_key, duration_seconds)
     return {
         "success": True,
         "video": saved_file,
@@ -768,8 +855,8 @@ async def generate_video_from_image(
     """Generate video from a static image (I2V).
 
     Models:
-    - kling: Kling 2.1 — best for realistic humans ($0.10/5s)
-    - wan21: Wan 2.1 — general purpose ($0.08/5s)
+    - kling: Kling 2.1 Standard — best for realistic humans ($0.28/5s + $0.056/extra sec)
+    - wan21: Wan 2.1 — general purpose ($0.20-$0.40/video)
     """
     model_info = VIDEO_MODELS.get(model_key, VIDEO_MODELS["kling"])
     model_id = model_info["id"]
@@ -812,8 +899,7 @@ async def generate_video_from_image(
     except Exception:
         duration_s = 5.0
 
-    cost_per_5s = float(model_info.get("cost_per_5s", 0.10) or 0.10)
-    cost_estimate = round(cost_per_5s * (duration_s / 5.0), 4)
+    cost_estimate = _calc_i2v_cost(model_key, duration_s)
 
     return {
         "success": True,
@@ -1021,7 +1107,7 @@ def get_pipeline_status() -> dict:
                 "key": k,
                 "name": v["name"],
                 "quality": v["quality"],
-                "cost": f"${v.get('cost_per_second', v.get('cost_per_minute', '?'))}/{'sec' if 'cost_per_second' in v else 'min'}",
+                "cost": f"${v.get('cost_per_second', v.get('cost_flat_under_40s', '?'))}/{'sec' if 'cost_per_second' in v else 'flat'}",
                 "best_for": v.get("best_for", []),
             }
             for k, v in LIPSYNC_MODELS.items()
@@ -1031,7 +1117,7 @@ def get_pipeline_status() -> dict:
                 "key": k,
                 "name": v["name"],
                 "quality": v["quality"],
-                "cost": f"${v.get('cost_per_5s', '?')}/5s",
+                "cost": f"${v.get('cost_base_5s', v.get('cost_per_video_720p', '?'))}/{'5s' if 'cost_base_5s' in v else 'video'}",
                 "best_for": v.get("best_for", []),
             }
             for k, v in VIDEO_MODELS.items()
@@ -1043,12 +1129,12 @@ def get_pipeline_status() -> dict:
         ],
         "budget_estimate": {
             "budget_9_dollars": {
-                "photos_realism": f"~{int(9/0.025)} images (FLUX 2 Realism)",
-                "photos_dev": f"~{int(9/0.01)} images (FLUX Dev)",
+                "photos_realism": f"~{int(9/0.021)} images (FLUX 2 Realism @ $0.021)",
+                "photos_dev": f"~{int(9/0.025)} images (FLUX Dev @ $0.025)",
                 "voice_clips": "unlimited (edge-tts free)",
-                "lipsync_omnihuman_3s": f"~{int(9/(0.16*3))} clips (OmniHuman)",
-                "lipsync_kling_3s": f"~{int(9/(0.08*3))} clips (Kling Avatar)",
-                "videos_kling_5s": f"~{int(9/0.10)} clips (Kling 2.1 I2V)",
+                "lipsync_omnihuman_3s": f"~{int(9/(0.16*3))} clips (OmniHuman @ $0.16/s)",
+                "lipsync_kling_5s": f"~{int(9/0.07)} clips (Kling LipSync @ $0.07/5s)",
+                "videos_kling_5s": f"~{int(9/0.28)} clips (Kling 2.1 I2V @ $0.28/5s)",
             }
         },
         "storage_dir": str(GENERATED_DIR),

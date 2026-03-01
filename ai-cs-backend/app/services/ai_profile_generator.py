@@ -721,27 +721,33 @@ def generate_voice_script(profile: dict, moment_type: str = "clutch", moment_des
 
 
 def estimate_generation_cost(task_type: str, use_gpu_server: bool = False) -> dict:
-    """Estimate cost for different generation tasks."""
+    """Estimate cost for different generation tasks.
+
+    All fal.ai prices verified March 2026 from official model pages.
+    """
     costs = {
         "image_generation": {
-            "api_replicate": {"cost": 0.02, "time_seconds": 8, "quality": "high"},
-            "api_fal": {"cost": 0.01, "time_seconds": 5, "quality": "high"},
-            "self_hosted_a100": {"cost": 0.003, "time_seconds": 4, "quality": "high"},
-            "self_hosted_rtx4090": {"cost": 0.001, "time_seconds": 6, "quality": "high"},
+            "fal_flux_realism": {"cost": 0.021, "time_seconds": 8, "quality": "high", "note": "$0.021/MP"},
+            "fal_flux_pro": {"cost": 0.04, "time_seconds": 5, "quality": "highest", "note": "$0.04/MP"},
+            "fal_flux_dev": {"cost": 0.025, "time_seconds": 6, "quality": "high", "note": "$0.025/MP"},
+            "fal_flux_schnell": {"cost": 0.003, "time_seconds": 2, "quality": "good", "note": "$0.003/MP"},
+            "fal_lora_inference": {"cost": 0.025, "time_seconds": 8, "quality": "high", "note": "$0.025/MP"},
         },
-        "lip_sync_video": {
-            "api_replicate": {"cost": 0.15, "time_seconds": 45, "quality": "high"},
-            "self_hosted_a100": {"cost": 0.04, "time_seconds": 30, "quality": "high"},
-            "self_hosted_rtx4090": {"cost": 0.02, "time_seconds": 60, "quality": "medium-high"},
+        "lip_sync_video_5s": {
+            "fal_omnihuman": {"cost": 0.80, "time_seconds": 60, "quality": "film-grade", "note": "$0.16/sec"},
+            "fal_kling_lipsync": {"cost": 0.07, "time_seconds": 30, "quality": "high", "note": "$0.014/sec, 5s min"},
+            "fal_latentsync": {"cost": 0.20, "time_seconds": 45, "quality": "medium", "note": "$0.20 flat ≤40s"},
         },
         "voice_generation": {
-            "api_replicate": {"cost": 0.01, "time_seconds": 3, "quality": "high"},
-            "self_hosted_any": {"cost": 0.001, "time_seconds": 2, "quality": "high"},
+            "elevenlabs": {"cost": 0.015, "time_seconds": 3, "quality": "highest", "note": "$0.30/1000 chars"},
+            "edge_tts": {"cost": 0.0, "time_seconds": 2, "quality": "good", "note": "free"},
         },
-        "full_video_30s": {
-            "api_replicate": {"cost": 0.50, "time_seconds": 120, "quality": "high"},
-            "self_hosted_a100": {"cost": 0.12, "time_seconds": 90, "quality": "high"},
-            "self_hosted_rtx4090": {"cost": 0.06, "time_seconds": 180, "quality": "medium-high"},
+        "video_i2v_5s": {
+            "fal_kling_standard": {"cost": 0.28, "time_seconds": 60, "quality": "high", "note": "$0.28 for 5s"},
+            "fal_wan21_720p": {"cost": 0.40, "time_seconds": 60, "quality": "high", "note": "$0.40/video"},
+        },
+        "lora_training": {
+            "fal_flux_lora": {"cost": 2.40, "time_seconds": 600, "quality": "high", "note": "$2/run × 1.2 for 1200 steps"},
         },
     }
     return costs.get(task_type, {})

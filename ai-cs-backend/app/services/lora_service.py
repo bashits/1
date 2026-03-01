@@ -41,12 +41,15 @@ LORA_TRAINING_CONFIG = {
     "default_learning_rate": None,  # Let fal.ai choose optimal
     "create_masks": True,  # Face masks for better identity preservation
     "is_style": False,  # We're training a person, not a style
-    "cost_per_training": 2.50,  # slightly higher with more steps
+    # Official: $2 per training run (scales linearly with steps)
+    # 1200 steps = ~$2.40 (1.2x base rate)
+    "cost_per_training": 2.40,
 }
 
 LORA_INFERENCE_CONFIG = {
     "model_id": "fal-ai/flux-lora",
-    "cost_per_image": 0.05,
+    # fal-ai/flux-lora pricing: ~$0.025/MP (similar to flux/dev)
+    "cost_per_image": 0.025,
     "default_guidance_scale": 3.5,
     "default_num_inference_steps": 32,  # 32 steps for sharper details (was 28)
     "default_lora_scale": 0.95,  # 0.95 for naturalness (1.0 can over-fit)
