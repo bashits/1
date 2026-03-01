@@ -849,7 +849,7 @@ async def generate_video(
     appearance = profile.get("appearance", {})
 
     if req.photo_prompt:
-        photo_prompt = f"{trigger_word}, {req.photo_prompt}"
+        photo_prompt = f"{trigger_word}, {req.photo_prompt}" if trigger_word else req.photo_prompt
     else:
         photo_prompt = build_lora_prompt(
             trigger_word=trigger_word,

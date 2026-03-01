@@ -208,8 +208,9 @@ async def create_montage_endpoint(
     # Auto-save to girl's content_items if profile_id provided and montage succeeded
     if req.girl_profile_id and result.get("success"):
         try:
-            file_path = result.get("output", {}).get("file_path") or result.get("file_path")
-            serve_url = result.get("output", {}).get("serve_url") or result.get("serve_url")
+            file_path = result.get("output_path") or result.get("output", {}).get("file_path") or result.get("file_path")
+            filename = file_path.split("/")[-1] if file_path else None
+            serve_url = f"/api/montage/files/output/{filename}" if filename else None
             duration = result.get("output", {}).get("duration") or result.get("duration", 0)
             total_cost = result.get("total_cost", 0.0)
 
