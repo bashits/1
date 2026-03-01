@@ -619,7 +619,7 @@ def select_lipsync_model(quality: str = "maximum") -> dict:
         return LIPSYNC_MODELS["omnihuman"]
     if quality == "high":
         return LIPSYNC_MODELS["kling_avatar"]
-    return LIPSYNC_MODELS["veed"]
+    return LIPSYNC_MODELS["latentsync"]
 
 
 async def generate_photo(
