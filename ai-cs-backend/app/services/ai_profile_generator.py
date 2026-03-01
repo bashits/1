@@ -206,10 +206,13 @@ def generate_image_prompt(profile: dict, content_type: str = "clip_reaction", co
     body_type = app.get("body_type", "athletic slim")
 
     identity = (
-        f"RAW photo, ultra realistic, natural skin texture with pores and imperfections, "
-        f"subsurface scattering, natural hair strands, catchlight in eyes. "
-        f"Photorealistic photo of a beautiful {age} year old {ethnicity} woman, "
-        f"{hair_color} {hair_style} hair, {eye_color} eyes, {skin_tone} skin, {body_type} body"
+        f"RAW photo, DSLR, unedited, unfiltered, authentic candid photograph. "
+        f"Natural skin texture with visible pores, fine lines, subtle blemishes, peach fuzz on cheeks. "
+        f"Subsurface scattering on skin, natural individual hair strands with flyaways, "
+        f"realistic catchlight reflections in eyes, natural iris texture. "
+        f"Photorealistic photograph of a gorgeous {age} year old {ethnicity} woman, "
+        f"{hair_color} {hair_style} hair, {eye_color} eyes, {skin_tone} skin, {body_type} body, "
+        f"natural makeup, no airbrushing, no beauty filter"
     )
 
     style_map = {
@@ -218,7 +221,8 @@ def generate_image_prompt(profile: dict, content_type: str = "clip_reaction", co
             f", wearing sleek gaming headset around neck, at RGB-lit gaming setup with dual monitors, "
             "leaning toward camera with excited surprised expression, mouth slightly open, wide eyes, "
             "webcam selfie angle from slightly above, dim room lit by screen glow and LED strips, "
-            "natural flyaway hairs, genuine emotion"
+            "natural flyaway hairs, genuine emotion, visible skin texture under monitor light, "
+            "sweat sheen on forehead from intense gaming session"
         ),
         "clip_reaction": (
             ", wearing gaming headset, sitting at gaming desk with RGB lights, "
@@ -291,8 +295,10 @@ def generate_image_prompt(profile: dict, content_type: str = "clip_reaction", co
 
     suffix = style_map.get(content_type, style_map.get("portrait", ""))
     quality = (
-        ", shot on Canon EOS R5 85mm f/1.4, shallow depth of field, "
-        "professional color grading, film grain, masterpiece, best quality, ultra detailed, 8k"
+        ", shot on Canon EOS R5 85mm f/1.4, ISO 400, shallow depth of field bokeh, "
+        "professional color grading, subtle film grain, natural lighting, "
+        "no retouching, no smoothing, no beauty mode, no CGI, no illustration, "
+        "editorial photography, Vogue quality, ultra detailed, 8k UHD"
     )
 
     prompt = f"{identity}{suffix}{quality}"

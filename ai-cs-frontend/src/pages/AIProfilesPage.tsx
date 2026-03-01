@@ -991,97 +991,269 @@ function ContentTab({
   selected: AIProfile;
   setContentItems: (v: ContentItem[]) => void;
 }) {
+  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+
+  const photos = contentItems.filter((i) => i.content_type === "photo");
+  const videos = contentItems.filter((i) => i.content_type === "video");
+  const voices = contentItems.filter((i) => i.content_type === "voice");
+
+  const FILTERS = [
+    { id: "", label: "Все", icon: Eye, count: contentItems.length },
+    { id: "photo", label: "Фото", icon: Camera, count: photos.length },
+    { id: "video", label: "Видео", icon: Video, count: videos.length },
+    { id: "voice", label: "Голос", icon: Mic, count: voices.length },
+  ];
+
   return (
     <div className="space-y-4">
+      {/* Cost summary bar */}
       {costs && (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
-          <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
-            <DollarSign className="h-5 w-5 text-green-400" /> Стоимость
-          </h3>
-          <div className="grid grid-cols-4 gap-3 mb-4">
-            <div className="bg-zinc-800 rounded-lg p-3 text-center">
-              <div className="text-lg font-bold text-green-400">${costs.total_cost.toFixed(2)}</div>
-              <div className="text-xs text-zinc-500">Всего</div>
-            </div>
-            <div className="bg-zinc-800 rounded-lg p-3 text-center">
-              <div className="text-lg font-bold">{costs.total_photos}</div>
-              <div className="text-xs text-zinc-500">Фото</div>
-            </div>
-            <div className="bg-zinc-800 rounded-lg p-3 text-center">
-              <div className="text-lg font-bold">{costs.total_videos}</div>
-              <div className="text-xs text-zinc-500">Видео</div>
-            </div>
-            <div className="bg-zinc-800 rounded-lg p-3 text-center">
-              <div className="text-lg font-bold">{costs.total_posts}</div>
-              <div className="text-xs text-zinc-500">Постов</div>
+        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold flex items-center gap-2">
+              <DollarSign className="h-4 w-4 text-green-400" /> Статистика
+            </h3>
+            <div className="flex gap-4">
+              <div className="text-center">
+                <div className="text-sm font-bold text-green-400">${costs.total_cost.toFixed(2)}</div>
+                <div className="text-[10px] text-zinc-500">Потрачено</div>
+              </div>
+              <div className="text-center">
+                <div className="text-sm font-bold">{costs.total_photos}</div>
+                <div className="text-[10px] text-zinc-500">Фото</div>
+              </div>
+              <div className="text-center">
+                <div className="text-sm font-bold">{costs.total_videos}</div>
+                <div className="text-[10px] text-zinc-500">Видео</div>
+              </div>
+              <div className="text-center">
+                <div className="text-sm font-bold">{voices.length}</div>
+                <div className="text-[10px] text-zinc-500">Голосов</div>
+              </div>
             </div>
           </div>
-          {costs.breakdown.length > 0 && costs.breakdown.map((b) => (
-            <div key={b.type} className="flex items-center justify-between bg-zinc-800 rounded px-3 py-2 text-sm mb-1">
-              <span>{b.type}</span>
-              <span className="text-zinc-400">{b.count}x &middot; ${b.cost.toFixed(4)}</span>
+        </div>
+      )}
+
+      {/* Filters and view mode */}
+      <div className="flex items-center justify-between">
+        <div className="flex gap-2">
+          {FILTERS.map((f) => (
+            <button
+              key={f.id}
+              onClick={() => {
+                setContentFilter(f.id);
+                api.getProfileContent(selected.id, f.id || undefined).then(setContentItems).catch(() => {});
+              }}
+              className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all ${
+                contentFilter === f.id
+                  ? "bg-pink-600 text-white"
+                  : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
+              }`}
+            >
+              <f.icon className="h-3 w-3" /> {f.label} ({f.count})
+            </button>
+          ))}
+        </div>
+        <div className="flex gap-1">
+          <button
+            onClick={() => setViewMode("grid")}
+            className={`p-1.5 rounded ${viewMode === "grid" ? "bg-zinc-700 text-white" : "text-zinc-500"}`}
+          >
+            <Image className="h-4 w-4" />
+          </button>
+          <button
+            onClick={() => setViewMode("list")}
+            className={`p-1.5 rounded ${viewMode === "list" ? "bg-zinc-700 text-white" : "text-zinc-500"}`}
+          >
+            <FileText className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+
+      {contentItems.length === 0 ? (
+        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-12 text-center">
+          <Camera className="h-10 w-10 text-zinc-600 mx-auto mb-3" />
+          <div className="text-zinc-500 text-sm">Нет контента</div>
+          <div className="text-zinc-600 text-xs mt-1">Сгенерируй фото или видео во вкладке "Генерация"</div>
+        </div>
+      ) : viewMode === "grid" ? (
+        /* ===== GRID VIEW — photos as thumbnails, voice as cards, video as players ===== */
+        <div className="grid grid-cols-3 gap-3">
+          {contentItems.map((item) => (
+            <div key={item.id} className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden group relative">
+              {/* Photo — show actual image */}
+              {item.content_type === "photo" && item.file_url && (
+                <div className="relative cursor-pointer" onClick={() => setLightboxUrl(item.file_url)}>
+                  <img
+                    src={item.file_url}
+                    alt={item.title || "Photo"}
+                    className="w-full aspect-square object-cover"
+                    loading="lazy"
+                  />
+                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-all flex items-center justify-center">
+                    <Eye className="h-6 w-6 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+                  </div>
+                  {/* Type badge */}
+                  <div className="absolute top-2 left-2">
+                    <span className="bg-blue-500/80 text-white text-[9px] px-1.5 py-0.5 rounded font-medium backdrop-blur-sm">
+                      <Camera className="h-2.5 w-2.5 inline mr-0.5" /> ФОТО
+                    </span>
+                  </div>
+                </div>
+              )}
+              {/* Photo without URL — fallback card */}
+              {item.content_type === "photo" && !item.file_url && (
+                <div className="w-full aspect-square bg-zinc-800 flex items-center justify-center">
+                  <Camera className="h-8 w-8 text-zinc-600" />
+                </div>
+              )}
+              {/* Video — show player */}
+              {item.content_type === "video" && (
+                <div className="relative">
+                  {item.file_url ? (
+                    <video
+                      src={item.file_url}
+                      className="w-full aspect-video object-cover"
+                      controls
+                      preload="metadata"
+                    />
+                  ) : item.file_path ? (
+                    <video
+                      src={`${API_URL}/api/montage/files/${item.file_path.replace("/data/", "")}`}
+                      className="w-full aspect-video object-cover"
+                      controls
+                      preload="metadata"
+                    />
+                  ) : (
+                    <div className="w-full aspect-video bg-zinc-800 flex items-center justify-center">
+                      <Video className="h-8 w-8 text-zinc-600" />
+                    </div>
+                  )}
+                  <div className="absolute top-2 left-2">
+                    <span className="bg-violet-500/80 text-white text-[9px] px-1.5 py-0.5 rounded font-medium backdrop-blur-sm">
+                      <Video className="h-2.5 w-2.5 inline mr-0.5" /> ВИДЕО
+                    </span>
+                  </div>
+                </div>
+              )}
+              {/* Voice — audio card with waveform style */}
+              {item.content_type === "voice" && (
+                <div className="p-4">
+                  <div className="flex items-center gap-2 mb-3">
+                    <div className="w-10 h-10 rounded-full bg-pink-500/20 flex items-center justify-center flex-shrink-0">
+                      <Mic className="h-5 w-5 text-pink-400" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-medium truncate">{item.title || "Голос"}</div>
+                      <div className="text-[10px] text-zinc-500">{item.duration ? `${item.duration}с` : ""}</div>
+                    </div>
+                    <span className="bg-pink-500/80 text-white text-[9px] px-1.5 py-0.5 rounded font-medium">
+                      ГОЛОС
+                    </span>
+                  </div>
+                  {item.file_path && (
+                    <audio
+                      controls
+                      className="w-full h-8"
+                      src={`${API_URL}/api/montage/files/${item.file_path.replace("/data/", "")}`}
+                    />
+                  )}
+                </div>
+              )}
+              {/* Info bar at bottom */}
+              <div className="px-3 py-2 flex items-center justify-between border-t border-zinc-800">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] text-green-400 font-medium">${item.cost.toFixed(3)}</span>
+                  <span className="text-[10px] text-zinc-600">&middot;</span>
+                  <span className="text-[10px] text-zinc-500">{item.created_at?.slice(0, 10)}</span>
+                </div>
+                <span className={`text-[9px] px-1.5 py-0.5 rounded font-medium ${
+                  item.status === "completed"
+                    ? "bg-green-500/20 text-green-400"
+                    : "bg-yellow-500/20 text-yellow-400"
+                }`}>
+                  {item.status === "completed" ? "OK" : item.status}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        /* ===== LIST VIEW ===== */
+        <div className="space-y-2">
+          {contentItems.map((item) => (
+            <div key={item.id} className="bg-zinc-900 border border-zinc-800 rounded-xl p-3 flex items-center gap-3">
+              {/* Thumbnail */}
+              <div className="w-16 h-16 rounded-lg overflow-hidden flex-shrink-0 bg-zinc-800">
+                {item.content_type === "photo" && item.file_url ? (
+                  <img src={item.file_url} alt="" className="w-full h-full object-cover cursor-pointer" onClick={() => setLightboxUrl(item.file_url)} loading="lazy" />
+                ) : item.content_type === "video" ? (
+                  <div className="w-full h-full flex items-center justify-center"><Video className="h-6 w-6 text-violet-400" /></div>
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center"><Mic className="h-6 w-6 text-pink-400" /></div>
+                )}
+              </div>
+              {/* Info */}
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className={`text-[9px] px-1.5 py-0.5 rounded font-medium ${
+                    item.content_type === "photo" ? "bg-blue-500/20 text-blue-400" :
+                    item.content_type === "video" ? "bg-violet-500/20 text-violet-400" :
+                    "bg-pink-500/20 text-pink-400"
+                  }`}>
+                    {item.content_type === "photo" ? "ФОТО" : item.content_type === "video" ? "ВИДЕО" : "ГОЛОС"}
+                  </span>
+                  <span className="text-xs font-medium truncate">{item.title || item.content_type}</span>
+                </div>
+                <div className="text-[10px] text-zinc-500 truncate mt-0.5">{item.prompt}</div>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="text-[10px] text-green-400">${item.cost.toFixed(3)}</span>
+                  <span className="text-[10px] text-zinc-600">{item.created_at?.slice(0, 16)}</span>
+                </div>
+              </div>
+              {/* Audio player for voice items */}
+              {item.content_type === "voice" && item.file_path && (
+                <audio controls className="h-8 w-40 flex-shrink-0" src={`${API_URL}/api/montage/files/${item.file_path.replace("/data/", "")}`} />
+              )}
+              {/* Open link for photos/videos */}
+              {item.file_url && item.content_type !== "voice" && (
+                <a href={item.file_url} target="_blank" rel="noopener noreferrer" className="text-zinc-400 hover:text-white p-1">
+                  <Download className="h-4 w-4" />
+                </a>
+              )}
             </div>
           ))}
         </div>
       )}
 
-      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold flex items-center gap-2">
-            <Image className="h-5 w-5 text-pink-400" /> Галерея
-          </h3>
-          <div className="flex gap-2">
-            {["", "voice", "photo", "video"].map((f) => (
-              <button
-                key={f}
-                onClick={() => {
-                  setContentFilter(f);
-                  api.getProfileContent(selected.id, f || undefined).then(setContentItems).catch(() => {});
-                }}
-                className={`text-xs px-3 py-1 rounded ${
-                  contentFilter === f ? "bg-pink-600 text-white" : "bg-zinc-800 text-zinc-400"
-                }`}
-              >
-                {f || "Все"}
-              </button>
-            ))}
+      {/* Lightbox */}
+      {lightboxUrl && (
+        <div
+          className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center cursor-pointer"
+          onClick={() => setLightboxUrl(null)}
+        >
+          <img src={lightboxUrl} alt="Full size" className="max-w-[90vw] max-h-[90vh] object-contain rounded-lg" />
+          <div className="absolute top-4 right-4 flex gap-2">
+            <a
+              href={lightboxUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="bg-zinc-800 hover:bg-zinc-700 text-white px-3 py-2 rounded-lg text-sm flex items-center gap-1"
+            >
+              <Download className="h-4 w-4" /> Скачать
+            </a>
+            <button
+              onClick={() => setLightboxUrl(null)}
+              className="bg-zinc-800 hover:bg-zinc-700 text-white px-3 py-2 rounded-lg text-sm"
+            >
+              Закрыть
+            </button>
           </div>
         </div>
-        {contentItems.length === 0 ? (
-          <div className="text-center text-zinc-500 text-sm py-8">Нет контента</div>
-        ) : (
-          <div className="grid grid-cols-3 gap-3">
-            {contentItems.map((item) => (
-              <div key={item.id} className="bg-zinc-800 rounded-lg p-3">
-                <div className="flex items-center gap-2 mb-2">
-                  {item.content_type === "voice" && <Mic className="h-4 w-4 text-pink-400" />}
-                  {item.content_type === "photo" && <Image className="h-4 w-4 text-blue-400" />}
-                  {item.content_type === "video" && <Video className="h-4 w-4 text-violet-400" />}
-                  <span className="text-xs font-medium">{item.title || item.content_type}</span>
-                </div>
-                <div className="text-xs text-zinc-500 truncate">{item.prompt}</div>
-                <div className="flex items-center justify-between mt-2">
-                  <span className="text-[10px] text-green-400">${item.cost.toFixed(4)}</span>
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${
-                    item.status === "completed"
-                      ? "bg-green-500/20 text-green-400"
-                      : "bg-yellow-500/20 text-yellow-400"
-                  }`}>
-                    {item.status}
-                  </span>
-                </div>
-                {item.file_path && item.content_type === "voice" && (
-                  <audio
-                    controls
-                    className="w-full mt-2 h-8"
-                    src={`${API_URL}/api/montage/files/${item.file_path.replace("/data/", "")}`}
-                  />
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      )}
     </div>
   );
 }

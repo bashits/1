@@ -48,7 +48,8 @@ IMAGE_MODELS = {
         "quality": 10,
         "cost_per_image": 0.025,
         "best_for": ["portraits", "photorealism", "humans"],
-        "default_steps": 28,
+        "default_steps": 35,
+        "default_guidance": 3.5,
     },
     "flux2_pro": {
         "id": "fal-ai/flux-pro/v1.1",
@@ -132,10 +133,13 @@ REALISM_BOOSTERS = (
 )
 
 NEGATIVE_QUALITY = (
-    "illustration, painting, drawing, anime, cartoon, CGI, 3D render, "
-    "plastic skin, airbrushed, smooth skin, unrealistic, deformed, "
-    "bad anatomy, bad hands, missing fingers, extra fingers, "
-    "text, watermark, logo, blurry, low quality, overexposed"
+    "illustration, painting, drawing, anime, cartoon, CGI, 3D render, digital art, "
+    "plastic skin, airbrushed, smooth skin, porcelain skin, wax figure, mannequin, "
+    "unrealistic, deformed, bad anatomy, bad hands, missing fingers, extra fingers, "
+    "extra limbs, disfigured, mutated, ugly, blurry eyes, cross-eyed, "
+    "text, watermark, logo, blurry, low quality, overexposed, underexposed, "
+    "oversaturated, beauty filter, face app, facetune, snapchat filter, "
+    "stock photo, clip art, render, fake, artificial"
 )
 
 
@@ -439,9 +443,11 @@ async def generate_photo(
 
     # Model-specific params
     if "realism" in model_id or "lora" in model_id:
-        input_data["num_inference_steps"] = num_inference_steps or model_info.get("default_steps", 40)
-    if guidance_scale is not None:
-        input_data["guidance_scale"] = guidance_scale
+        input_data["num_inference_steps"] = num_inference_steps or model_info.get("default_steps", 35)
+    # Use explicit guidance_scale, or model default, or skip
+    effective_guidance = guidance_scale if guidance_scale is not None else model_info.get("default_guidance")
+    if effective_guidance is not None:
+        input_data["guidance_scale"] = effective_guidance
     if seed is not None:
         input_data["seed"] = seed
     if negative_prompt:
