@@ -385,6 +385,33 @@ async def create_profile(
             import logging
             logging.warning(f"Auto-photo generation failed for profile {profile_id}: {e}")
 
+    # ═══ AUTO-CREATE VOICE IDENTITY ═══
+    try:
+        el_voice_name = voice_config.get("elevenlabs_voice_name", "Jessica")
+        el_persona_id = voice_config.get("persona_id", "jessica_fire")
+        el_persona_for_vi = VOICE_PERSONAS.get(el_persona_id, VOICE_PERSONAS["jessica_fire"])
+        vi_audio_tags = el_persona_for_vi.get("signature_tags", [])
+        vi_personality_traits = [personality.get("archetype", ""), personality.get("tone", "")]
+        vi_speaking_style = voice_config.get("style_guide", personality.get("speaking_style", "natural"))
+
+        await db.execute(
+            """INSERT OR IGNORE INTO voice_identity
+               (profile_id, provider, voice_name, voice_settings, audio_tags, personality_traits, speaking_style, language)
+               VALUES (?, 'elevenlabs', ?, ?, ?, ?, ?, 'en')""",
+            (
+                profile_id,
+                el_voice_name,
+                json.dumps(elevenlabs_settings),
+                json.dumps(vi_audio_tags),
+                json.dumps(vi_personality_traits),
+                vi_speaking_style,
+            ),
+        )
+        await db.commit()
+    except Exception as e:
+        import logging
+        logging.warning(f"Auto voice identity creation failed for profile {profile_id}: {e}")
+
     cursor2 = await db.execute("SELECT * FROM ai_profiles WHERE id = ?", (profile_id,))
     row = await cursor2.fetchone()
     result = _parse_profile(row)
@@ -606,16 +633,16 @@ async def generate_photo(
         appearance = profile.get("appearance", {})
         if req.prompt:
             # Prepend trigger word to custom prompt
-            lora_prompt = f"{trigger_word}, {req.prompt}"
+            prompt = f"{trigger_word}, {req.prompt}"
         else:
-            lora_prompt = build_lora_prompt(
+            prompt = build_lora_prompt(
                 trigger_word=trigger_word,
                 appearance=appearance,
                 content_type=req.content_type,
                 custom_scene=req.custom_scene or "",
             )
         result = await generate_photo_with_lora(
-            prompt=lora_prompt,
+            prompt=prompt,
             lora_url=lora_url,
             lora_scale=req.lora_scale,
             width=req.width,

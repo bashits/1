@@ -288,6 +288,8 @@ export default function AIProfilesPage() {
         model_key: photoModel,
         use_reference_images: photoUseRef,
         set_as_reference: photoSetRef,
+        use_lora: true,
+        lora_scale: 1.0,
         num_images: 1,
         width: 1024,
         height: 1024,
@@ -1105,8 +1107,14 @@ function GenerateTab({
             )}
           </button>
           <p className="text-xs text-zinc-500">
-            ~${PHOTO_MODELS.find((m) => m.id === photoModel)?.cost || "0.025"} за фото
-            {photoUseRef && refCount > 0 && " | Идентичность сохранена через референсы"}
+            {selected?.lora_training_status === "trained" ? (
+              <span className="text-green-400">LoRA активна — лицо зафиксировано (~$0.05/фото)</span>
+            ) : (
+              <>
+                ~${PHOTO_MODELS.find((m) => m.id === photoModel)?.cost || "0.025"} за фото
+                {photoUseRef && refCount > 0 && " | Идентичность через референсы"}
+              </>
+            )}
           </p>
 
           {/* Photo result */}
@@ -1125,7 +1133,10 @@ function GenerateTab({
                     <div className="flex gap-2 text-xs text-zinc-400">
                       <span>{photoResult.model_name}</span>
                       <span>~${(photoResult.cost_estimate || photoResult.total_cost || 0).toFixed(3)}</span>
-                      {photoResult.used_reference_images && (
+                      {photoResult.used_lora && (
+                        <span className="text-green-400">LoRA ✓</span>
+                      )}
+                      {photoResult.used_reference_images && !photoResult.used_lora && (
                         <span className="text-amber-400">с референсами</span>
                       )}
                     </div>
