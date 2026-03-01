@@ -37,19 +37,19 @@ def _get_fal_key() -> str:
 
 LORA_TRAINING_CONFIG = {
     "model_id": "fal-ai/flux-lora-fast-training",
-    "default_steps": 1000,
+    "default_steps": 1200,  # 1200 steps for better identity lock (was 1000)
     "default_learning_rate": None,  # Let fal.ai choose optimal
     "create_masks": True,  # Face masks for better identity preservation
     "is_style": False,  # We're training a person, not a style
-    "cost_per_training": 2.00,
+    "cost_per_training": 2.50,  # slightly higher with more steps
 }
 
 LORA_INFERENCE_CONFIG = {
     "model_id": "fal-ai/flux-lora",
     "cost_per_image": 0.05,
     "default_guidance_scale": 3.5,
-    "default_num_inference_steps": 28,
-    "default_lora_scale": 1.0,
+    "default_num_inference_steps": 32,  # 32 steps for sharper details (was 28)
+    "default_lora_scale": 0.95,  # 0.95 for naturalness (1.0 can over-fit)
 }
 
 # Content types for generating diverse training dataset
@@ -523,9 +523,13 @@ def build_lora_prompt(
     content_type: str = "portrait",
     custom_scene: str = "",
 ) -> str:
-    """Build a prompt that uses the LoRA trigger word for face consistency.
+    """Build a prompt for LoRA inference — professional influencer quality.
 
-    The trigger word activates the trained LoRA identity.
+    Optimized for lanna.danger-level output:
+    - Natural skin, real photography feel
+    - Luxury lifestyle settings (pool, beach, wine, travel)
+    - Professional lighting and composition
+    - No AI artifacts, no over-processed look
     """
     ethnicity = appearance.get("ethnicity", "european")
     hair_color = appearance.get("hair_color", "dark blonde")
@@ -533,51 +537,97 @@ def build_lora_prompt(
     eye_color = appearance.get("eye_color", "green")
     skin_tone = appearance.get("skin_tone", "fair")
     age = appearance.get("age", 23)
+    body_type = appearance.get("body_type", "slim fit")
 
     identity = (
-        f"{trigger_word}, a {age} year old {ethnicity} woman, "
-        f"{hair_color} {hair_style} hair, {eye_color} eyes, {skin_tone} skin"
+        f"{trigger_word}, {age} year old {ethnicity} woman, "
+        f"{hair_color} {hair_style} hair, {eye_color} eyes, {skin_tone} skin, {body_type} body"
     )
 
+    # Professional photography realism block — no AI look
     realism = (
-        "RAW photo, ultra realistic, natural skin texture with pores, "
-        "subsurface scattering, individual hair strands, catchlight in eyes, "
-        "Canon EOS R5 85mm f/1.4, professional color grading"
+        "RAW photo, shot on Sony A7IV 85mm f/1.4, natural skin texture with pores and imperfections, "
+        "subsurface scattering, individual hair strands visible, real catchlight in eyes, "
+        "professional color grading, film grain, no airbrushing, no plastic skin, "
+        "photojournalistic quality, editorial magazine photo"
     )
 
     scenes = {
-        "portrait": f"{identity}, professional portrait, soft studio lighting, clean background, {realism}",
+        # === PORTRAITS ===
+        "portrait": (
+            f"{identity}, close-up portrait, soft directional window light, "
+            f"shallow depth of field, slight natural smile, dewy skin, {realism}"
+        ),
+        # === GAMING ===
         "gaming_reaction": (
             f"{identity}, wearing gaming headset, RGB gaming setup background, "
-            f"excited expression, webcam angle, screen glow lighting, {realism}"
+            f"excited expression looking at camera, webcam angle, screen glow on face, {realism}"
         ),
         "gaming_chill": (
-            f"{identity}, casual gaming hoodie, relaxed pose, gaming room, "
-            f"cozy ambient lighting, {realism}"
+            f"{identity}, oversized gaming hoodie, relaxed pose in gaming chair, "
+            f"cozy ambient RGB lighting, gaming room, {realism}"
         ),
+        # === LUXURY LIFESTYLE (lanna.danger level) ===
         "instagram_lifestyle": (
-            f"{identity}, trendy outfit, aesthetic cafe background, "
-            f"natural daylight, instagram style, {realism}"
+            f"{identity}, luxury lifestyle photo, designer outfit, "
+            f"aesthetic rooftop bar at sunset, golden hour light, "
+            f"champagne glass in hand, confident pose, influencer photography, {realism}"
         ),
         "instagram_glam": (
-            f"{identity}, glamorous makeup, evening outfit, city lights bokeh, "
-            f"professional photography, {realism}"
+            f"{identity}, glamorous evening look, red lips, "
+            f"little black dress, luxury restaurant background, "
+            f"warm candlelight, professional event photography, {realism}"
         ),
+        "pool_luxury": (
+            f"{identity}, bikini, luxury infinity pool, tropical resort, "
+            f"bright sunlight, water reflections on skin, relaxed pose, "
+            f"vacation photography, turquoise water, palm trees background, {realism}"
+        ),
+        "beach_sunset": (
+            f"{identity}, bikini on sandy beach, golden sunset light, "
+            f"ocean waves background, wind in hair, relaxed natural pose, "
+            f"tropical paradise, travel photography, {realism}"
+        ),
+        "wine_evening": (
+            f"{identity}, elegant dress, glass of red wine, "
+            f"luxury terrace with city view at night, warm string lights, "
+            f"intimate atmosphere, soft bokeh background, {realism}"
+        ),
+        "morning_coffee": (
+            f"{identity}, casual chic outfit, holding coffee cup, "
+            f"bright modern cafe, large windows with natural light, "
+            f"relaxed morning vibe, candid moment, {realism}"
+        ),
+        "travel_exotic": (
+            f"{identity}, summer dress, exotic travel destination, "
+            f"ancient architecture or tropical garden background, "
+            f"golden hour, travel influencer style, {realism}"
+        ),
+        "fitness_gym": (
+            f"{identity}, sports bra and leggings, gym setting, "
+            f"athletic pose, toned body, professional fitness photography, "
+            f"dramatic side lighting, {realism}"
+        ),
+        # === CLASSIC ===
         "selfie": (
-            f"{identity}, selfie angle, natural smile, casual outfit, "
-            f"soft natural lighting, slightly below eye level, {realism}"
+            f"{identity}, selfie angle, natural smile, casual trendy outfit, "
+            f"soft natural lighting, slightly below eye level, "
+            f"authentic iPhone selfie feel, {realism}"
         ),
         "intimate_cozy": (
-            f"{identity}, cozy home setting, soft warm lighting, "
-            f"relaxed casual outfit, intimate atmosphere, {realism}"
+            f"{identity}, silk pajamas, luxury bedroom, soft morning light, "
+            f"white bed sheets, relaxed intimate pose, "
+            f"warm tones, boudoir style, {realism}"
         ),
         "full_body": (
-            f"{identity}, full body shot, standing pose, clean background, "
-            f"professional studio lighting, fashion photography, {realism}"
+            f"{identity}, full body shot, confident standing pose, "
+            f"minimalist studio background, fashion editorial lighting, "
+            f"high-end fashion photography, {realism}"
         ),
         "outdoor": (
-            f"{identity}, outdoor setting, golden hour sunlight, "
-            f"bokeh background, natural environment, {realism}"
+            f"{identity}, sundress, golden hour sunlight in park, "
+            f"bokeh background, natural environment, wind in hair, "
+            f"lifestyle photography, {realism}"
         ),
     }
 

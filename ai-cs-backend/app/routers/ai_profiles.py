@@ -758,13 +758,30 @@ async def generate_video(
     req: GenerateVideoRequest,
     db: aiosqlite.Connection = Depends(get_db),
 ):
-    """Full pipeline: voice (ElevenLabs v3) + photo (fal.ai) + lip-sync (+ optional I2V)."""
+    """Full pipeline: voice (ElevenLabs v3) + photo (fal.ai with LoRA) + lip-sync (+ optional I2V).
+
+    LoRA-first approach: video generation is blocked until LoRA is trained.
+    Photo step uses LoRA for face consistency.
+    """
     cursor = await db.execute("SELECT * FROM ai_profiles WHERE id = ?", (profile_id,))
     row = await cursor.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Profile not found")
 
     profile = _parse_profile(row)
+
+    # ═══ BLOCK VIDEO GENERATION WITHOUT LoRA ═══
+    lora_status = profile.get("lora_training_status", "not_trained")
+    if lora_status != "trained":
+        status_messages = {
+            "not_trained": "Сначала обучите LoRA! Видео требует обученной модели для реалистичного лица.",
+            "sourcing_photos": "LoRA: идёт поиск реальных фото модели... Подождите.",
+            "generating_dataset": "LoRA: подготовка датасета... Подождите.",
+            "training": "LoRA обучается... Подождите 5-15 минут.",
+            "failed": "LoRA обучение не удалось. Попробуйте обучить заново.",
+        }
+        msg = status_messages.get(lora_status, f"LoRA статус: {lora_status}. Сначала обучите LoRA.")
+        raise HTTPException(status_code=400, detail=msg)
 
     # Step 1: Voice
     voice_result = await generate_girl_voice(
@@ -777,12 +794,20 @@ async def generate_video(
             "steps": [{"step": "voice", "result": voice_result}],
         }
 
-    # Step 2: Photo (use reference_images for identity if available)
-    photo_prompt = req.photo_prompt or generate_image_prompt(profile, "clip_reaction")
+    # Step 2: Photo — always use LoRA for face consistency
+    lora_url = profile.get("lora_model_url")
+    trigger_word = profile.get("lora_trigger_word")
+    appearance = profile.get("appearance", {})
 
-    reference_images = profile.get("reference_images") or []
-    if not isinstance(reference_images, list):
-        reference_images = []
+    if req.photo_prompt:
+        photo_prompt = f"{trigger_word}, {req.photo_prompt}"
+    else:
+        photo_prompt = build_lora_prompt(
+            trigger_word=trigger_word,
+            appearance=appearance,
+            content_type="gaming_reaction",
+            custom_scene=req.photo_prompt or "",
+        )
 
     from app.services.content_generation import (
         generate_photo as fal_photo,
@@ -793,18 +818,35 @@ async def generate_video(
     )
 
     used_reference_images = False
-    if reference_images:
-        used_reference_images = True
-        photo_result = await fal_photo_with_face(
+    # Always prefer LoRA for video photo step
+    if lora_url and trigger_word:
+        photo_result = await generate_photo_with_lora(
             prompt=photo_prompt,
-            face_image_url=reference_images[0],
-            reference_images=reference_images[:4],
+            lora_url=lora_url,
+            lora_scale=1.0,
             width=1024,
             height=1024,
-            method="flux2_pro",
+            num_images=1,
+            guidance_scale=3.5,
+            num_inference_steps=28,
         )
     else:
-        photo_result = await fal_photo(prompt=photo_prompt, model_key=req.photo_model_key)
+        # Fallback: reference images or standard (shouldn't happen if LoRA is trained)
+        reference_images = profile.get("reference_images") or []
+        if not isinstance(reference_images, list):
+            reference_images = []
+        if reference_images:
+            used_reference_images = True
+            photo_result = await fal_photo_with_face(
+                prompt=photo_prompt,
+                face_image_url=reference_images[0],
+                reference_images=reference_images[:4],
+                width=1024,
+                height=1024,
+                method="flux2_pro",
+            )
+        else:
+            photo_result = await fal_photo(prompt=photo_prompt, model_key=req.photo_model_key)
 
     if not photo_result.get("success"):
         return {

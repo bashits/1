@@ -205,7 +205,45 @@ async def search_pexels_multi(
     return list(all_photos.values())
 
 
-# ─── Smart Photo Selection ──────────────────────────────────────────
+# ─── Smart Photo Selection (Single-Typazh Filter) ───────────────────
+
+
+def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
+    """Convert hex color (#RRGGBB) to RGB tuple."""
+    hex_color = hex_color.lstrip("#")
+    if len(hex_color) != 6:
+        return (128, 128, 128)
+    return (int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16))
+
+
+def _color_distance(c1: tuple[int, int, int], c2: tuple[int, int, int]) -> float:
+    """Euclidean distance between two RGB colors (0-441 range)."""
+    return ((c1[0] - c2[0]) ** 2 + (c1[1] - c2[1]) ** 2 + (c1[2] - c2[2]) ** 2) ** 0.5
+
+
+def _compute_skin_tone_bucket(avg_color: str) -> str:
+    """Classify avg_color into a skin-tone bucket for consistency filtering.
+
+    Groups photos by approximate skin-tone warmth to avoid mixing
+    very different models (e.g., pale redhead vs dark brunette).
+    """
+    r, g, b = _hex_to_rgb(avg_color)
+    brightness = (r + g + b) / 3.0
+    warmth = r - b  # positive = warm skin tones
+
+    if brightness > 180:
+        return "light"
+    elif brightness > 130:
+        if warmth > 30:
+            return "warm_medium"
+        return "cool_medium"
+    elif brightness > 80:
+        if warmth > 20:
+            return "warm_dark"
+        return "cool_dark"
+    else:
+        return "very_dark"
+
 
 def group_by_photographer(photos: list[dict]) -> dict[int, list[dict]]:
     """Group photos by photographer — same photographer often = same model."""
@@ -218,63 +256,240 @@ def group_by_photographer(photos: list[dict]) -> dict[int, list[dict]]:
     return groups
 
 
+def _score_photo_quality(photo: dict) -> float:
+    """Score a single photo's quality for LoRA training (0-1).
+
+    Higher score = better for training.
+    """
+    score = 0.5  # baseline
+
+    w = photo.get("width", 0)
+    h = photo.get("height", 0)
+
+    # Resolution: prefer 1000+ px on shortest side
+    min_dim = min(w, h) if w and h else 0
+    if min_dim >= 1200:
+        score += 0.2
+    elif min_dim >= 800:
+        score += 0.1
+    elif min_dim < 400:
+        score -= 0.3  # too small for LoRA
+
+    # Aspect ratio: prefer portrait (3:4, 2:3) or square — NOT ultra-wide
+    if w and h:
+        ratio = w / h
+        if 0.6 <= ratio <= 0.85:  # portrait orientation
+            score += 0.15
+        elif 0.85 < ratio <= 1.15:  # square-ish
+            score += 0.05
+        elif ratio > 1.8 or ratio < 0.4:  # extreme aspect ratio
+            score -= 0.2
+
+    # Alt text hints (Pexels provides alt descriptions)
+    alt = (photo.get("alt") or "").lower()
+    positive_keywords = ["woman", "girl", "portrait", "face", "model", "beauty"]
+    negative_keywords = ["group", "crowd", "couple", "man", "boy", "child", "kid", "baby", "animal", "dog", "cat"]
+    for kw in positive_keywords:
+        if kw in alt:
+            score += 0.05
+    for kw in negative_keywords:
+        if kw in alt:
+            score -= 0.3  # strong penalty for non-solo-female photos
+
+    return max(0.0, min(1.0, score))
+
+
+def _score_group_consistency(photos: list[dict]) -> float:
+    """Score how consistent a group of photos is (likely same model).
+
+    Uses color palette similarity + resolution consistency.
+    Higher = more likely same person.
+    """
+    if len(photos) < 2:
+        return 0.5
+
+    # Color consistency: photos of same model tend to have similar avg colors
+    colors = []
+    for p in photos:
+        avg = p.get("avg_color", "")
+        if avg:
+            colors.append(_hex_to_rgb(avg))
+
+    color_consistency = 1.0
+    if len(colors) >= 2:
+        # Compute avg pairwise distance
+        distances = []
+        for i in range(min(len(colors), 10)):
+            for j in range(i + 1, min(len(colors), 10)):
+                distances.append(_color_distance(colors[i], colors[j]))
+        avg_dist = sum(distances) / len(distances) if distances else 0
+        # avg_dist 0-50 = very consistent, 50-100 = ok, 100+ = mixed models
+        if avg_dist < 40:
+            color_consistency = 1.0
+        elif avg_dist < 80:
+            color_consistency = 0.7
+        elif avg_dist < 120:
+            color_consistency = 0.4
+        else:
+            color_consistency = 0.2
+
+    # Skin tone bucket consistency
+    buckets = [_compute_skin_tone_bucket(p.get("avg_color", "")) for p in photos if p.get("avg_color")]
+    if buckets:
+        most_common = max(set(buckets), key=buckets.count)
+        bucket_consistency = buckets.count(most_common) / len(buckets)
+    else:
+        bucket_consistency = 0.5
+
+    # Resolution consistency
+    widths = [p.get("width", 0) for p in photos if p.get("width")]
+    if widths:
+        avg_w = sum(widths) / len(widths)
+        res_variance = sum((w - avg_w) ** 2 for w in widths) / len(widths)
+        res_consistency = 1.0 if res_variance < 100000 else 0.5
+    else:
+        res_consistency = 0.5
+
+    return 0.4 * color_consistency + 0.4 * bucket_consistency + 0.2 * res_consistency
+
+
 def select_best_photo_set(
     photos: list[dict],
     target_count: int = 15,
     min_count: int = 10,
+    appearance: Optional[dict] = None,
 ) -> list[dict]:
-    """Select the best set of photos for LoRA training.
+    """Select the best set of photos for LoRA training with SINGLE-TYPAZH filter.
 
-    Strategy:
-    1. Group by photographer (same model likely)
-    2. If a photographer has 10+ photos → use those (best case: same model)
-    3. If not, pick top photos from largest groups
-    4. Ensure diversity: mix portrait/landscape orientations
+    Smart strategy:
+    1. Filter out low-quality / non-portrait photos
+    2. Group by photographer (same photographer = likely same model)
+    3. Score each group for visual consistency (color palette, skin tone)
+    4. Pick the most consistent group with enough photos
+    5. If no single group is big enough, combine 2 most similar groups
+    6. Final filter: remove outliers by skin tone bucket
 
-    Returns list of photo dicts with URL and caption.
+    This ensures all training photos show the SAME type of person.
     """
     if not photos:
         return []
 
-    groups = group_by_photographer(photos)
+    # Step 1: Filter out bad quality photos
+    scored = []
+    for photo in photos:
+        quality = _score_photo_quality(photo)
+        if quality >= 0.3:  # reject obviously bad ones
+            scored.append((photo, quality))
 
-    # Sort groups by size (largest first)
+    if not scored:
+        logger.warning("All photos filtered out by quality check")
+        return photos[:target_count]  # fallback: return raw
+
+    # Sort by quality score
+    scored.sort(key=lambda x: x[1], reverse=True)
+    quality_photos = [p for p, _ in scored]
+
+    logger.info(f"Quality filter: {len(photos)} → {len(quality_photos)} photos")
+
+    # Step 2: Group by photographer
+    groups = group_by_photographer(quality_photos)
     sorted_groups = sorted(groups.items(), key=lambda x: len(x[1]), reverse=True)
 
-    # Strategy 1: Find a photographer with enough photos (likely same model)
-    for photographer_id, group_photos in sorted_groups:
-        if len(group_photos) >= min_count:
+    # Step 3: Score each group for consistency
+    group_scores = []
+    for pid, group_photos in sorted_groups:
+        consistency = _score_group_consistency(group_photos)
+        # Bonus for having more photos (bigger group = more likely professional set)
+        size_bonus = min(0.3, len(group_photos) * 0.03)
+        total_score = consistency + size_bonus
+        group_scores.append((pid, group_photos, total_score, consistency))
+
+    group_scores.sort(key=lambda x: x[2], reverse=True)
+
+    # Step 4: Find best single group
+    for pid, group_photos, score, consistency in group_scores:
+        if len(group_photos) >= min_count and consistency >= 0.5:
             logger.info(
-                f"Found photographer {group_photos[0]['photographer']} with "
-                f"{len(group_photos)} photos (likely same model)"
+                f"Single-typazh match: photographer '{group_photos[0]['photographer']}' "
+                f"({len(group_photos)} photos, consistency={consistency:.2f})"
             )
-            # Take up to target_count
             selected = group_photos[:target_count]
-            return selected
+            return _filter_outliers_by_skin_tone(selected)
 
-    # Strategy 2: Combine top photographers' photos
-    # Pick from largest groups first
+    # Step 5: Combine top 2-3 most similar groups
     selected = []
-    for photographer_id, group_photos in sorted_groups:
-        remaining = target_count - len(selected)
-        if remaining <= 0:
-            break
-        # Take proportionally from each group
-        take = min(len(group_photos), max(3, remaining))
-        selected.extend(group_photos[:take])
+    primary_bucket = None
+    for pid, group_photos, score, consistency in group_scores:
+        if not selected:
+            # First group sets the typazh
+            selected.extend(group_photos)
+            buckets = [_compute_skin_tone_bucket(p.get("avg_color", "")) for p in group_photos if p.get("avg_color")]
+            if buckets:
+                primary_bucket = max(set(buckets), key=buckets.count)
+            continue
 
-    # Strategy 3: If still not enough, just take all we have
+        if len(selected) >= target_count:
+            break
+
+        # Only add groups that match the primary skin tone
+        if primary_bucket:
+            group_buckets = [_compute_skin_tone_bucket(p.get("avg_color", "")) for p in group_photos if p.get("avg_color")]
+            if group_buckets:
+                group_primary = max(set(group_buckets), key=group_buckets.count)
+                if group_primary != primary_bucket:
+                    logger.info(f"Skipping photographer (skin tone mismatch: {group_primary} vs {primary_bucket})")
+                    continue
+
+        remaining = target_count - len(selected)
+        selected.extend(group_photos[:remaining])
+
+    # Step 6: If still not enough, add remaining quality photos that match typazh
     if len(selected) < min_count:
-        # Take all unique photos
         seen_ids = {p["id"] for p in selected}
-        for photo in photos:
+        for photo in quality_photos:
             if photo["id"] not in seen_ids:
+                if primary_bucket:
+                    bucket = _compute_skin_tone_bucket(photo.get("avg_color", ""))
+                    if bucket != primary_bucket:
+                        continue
                 selected.append(photo)
                 seen_ids.add(photo["id"])
             if len(selected) >= target_count:
                 break
 
-    return selected[:target_count]
+    result = selected[:target_count]
+    return _filter_outliers_by_skin_tone(result)
+
+
+def _filter_outliers_by_skin_tone(photos: list[dict]) -> list[dict]:
+    """Remove photos whose skin tone bucket doesn't match the majority.
+
+    This is the final consistency check to ensure single-typazh.
+    """
+    if len(photos) < 5:
+        return photos
+
+    buckets = [(p, _compute_skin_tone_bucket(p.get("avg_color", ""))) for p in photos]
+    bucket_counts: dict[str, int] = {}
+    for _, b in buckets:
+        bucket_counts[b] = bucket_counts.get(b, 0) + 1
+
+    if not bucket_counts:
+        return photos
+
+    primary = max(bucket_counts, key=bucket_counts.get)  # type: ignore[arg-type]
+    filtered = [p for p, b in buckets if b == primary]
+
+    # Only filter if we still have enough photos
+    if len(filtered) >= 5:
+        if len(filtered) < len(photos):
+            logger.info(
+                f"Skin-tone filter removed {len(photos) - len(filtered)} outlier photos "
+                f"(kept {len(filtered)} with tone '{primary}')"
+            )
+        return filtered
+
+    return photos  # not enough after filter, keep all
 
 
 def build_captions_for_training(
@@ -284,38 +499,50 @@ def build_captions_for_training(
 ) -> list[dict]:
     """Add LoRA training captions to photos.
 
-    Each photo gets a caption with the trigger word + appearance description.
-    Captions are varied to help LoRA generalize.
+    Each photo gets a caption with the trigger word + detailed appearance.
+    Captions are varied with different angles/lighting/poses to help LoRA
+    generalize across scenes while locking identity.
     """
     ethnicity = appearance.get("ethnicity", "european")
     hair_color = appearance.get("hair_color", "dark blonde")
     hair_style = appearance.get("hair_style", "long wavy")
     eye_color = appearance.get("eye_color", "green")
+    skin_tone = appearance.get("skin_tone", "fair")
+    body_type = appearance.get("body_type", "slim fit")
     age = appearance.get("age", 23)
 
-    base_desc = f"a {age} year old {ethnicity} woman with {hair_color} {hair_style} hair and {eye_color} eyes"
+    base_desc = (
+        f"{age} year old {ethnicity} woman, {hair_color} {hair_style} hair, "
+        f"{eye_color} eyes, {skin_tone} skin, {body_type} body"
+    )
 
+    # Diverse captions that teach LoRA identity across many conditions
     caption_templates = [
-        f"{trigger_word}, {base_desc}, professional portrait photo",
-        f"{trigger_word}, {base_desc}, natural lighting portrait",
-        f"{trigger_word}, {base_desc}, studio photo, clean background",
-        f"{trigger_word}, {base_desc}, casual photo, natural setting",
-        f"{trigger_word}, {base_desc}, close-up portrait, soft lighting",
-        f"{trigger_word}, {base_desc}, outdoor photo, natural light",
-        f"{trigger_word}, {base_desc}, lifestyle photo, relaxed pose",
-        f"{trigger_word}, {base_desc}, fashion portrait, professional",
-        f"{trigger_word}, {base_desc}, headshot, neutral expression",
-        f"{trigger_word}, {base_desc}, portrait, slight smile",
-        f"{trigger_word}, {base_desc}, three-quarter angle portrait",
-        f"{trigger_word}, {base_desc}, full body photo, standing",
-        f"{trigger_word}, {base_desc}, side profile, elegant pose",
-        f"{trigger_word}, {base_desc}, candid photo, natural expression",
-        f"{trigger_word}, {base_desc}, beauty portrait, soft focus",
-        f"{trigger_word}, {base_desc}, environmental portrait",
-        f"{trigger_word}, {base_desc}, editorial style photo",
-        f"{trigger_word}, {base_desc}, warm lighting portrait",
-        f"{trigger_word}, {base_desc}, moody portrait, dramatic light",
-        f"{trigger_word}, {base_desc}, bright and airy portrait",
+        # Portraits (identity lock)
+        f"{trigger_word}, {base_desc}, professional portrait, soft studio lighting, RAW photo",
+        f"{trigger_word}, {base_desc}, close-up face, natural window light, shallow DOF, RAW photo",
+        f"{trigger_word}, {base_desc}, three-quarter angle portrait, slight smile, RAW photo",
+        f"{trigger_word}, {base_desc}, headshot, neutral expression, clean background, RAW photo",
+        f"{trigger_word}, {base_desc}, beauty portrait, dewy skin, soft focus background, RAW photo",
+        # Different lighting conditions
+        f"{trigger_word}, {base_desc}, golden hour outdoor portrait, warm light, bokeh, RAW photo",
+        f"{trigger_word}, {base_desc}, overcast natural light, muted tones, editorial style, RAW photo",
+        f"{trigger_word}, {base_desc}, dramatic side lighting, moody portrait, RAW photo",
+        f"{trigger_word}, {base_desc}, bright and airy, high-key lighting, fresh look, RAW photo",
+        # Different poses/angles
+        f"{trigger_word}, {base_desc}, side profile, elegant neck line, rim light, RAW photo",
+        f"{trigger_word}, {base_desc}, looking over shoulder, confident expression, RAW photo",
+        f"{trigger_word}, {base_desc}, full body standing pose, fashion editorial, RAW photo",
+        f"{trigger_word}, {base_desc}, sitting pose, relaxed posture, lifestyle photo, RAW photo",
+        # Different settings
+        f"{trigger_word}, {base_desc}, casual indoor photo, natural daylight from window, RAW photo",
+        f"{trigger_word}, {base_desc}, outdoor in park, natural sunlight, green background, RAW photo",
+        f"{trigger_word}, {base_desc}, urban street portrait, city background, natural light, RAW photo",
+        f"{trigger_word}, {base_desc}, luxury setting, professional photography, RAW photo",
+        # Expressions variety
+        f"{trigger_word}, {base_desc}, candid laugh, authentic expression, natural moment, RAW photo",
+        f"{trigger_word}, {base_desc}, serious expression, model pose, editorial, RAW photo",
+        f"{trigger_word}, {base_desc}, warm genuine smile, approachable look, RAW photo",
     ]
 
     result = []

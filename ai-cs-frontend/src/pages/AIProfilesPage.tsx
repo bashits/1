@@ -966,14 +966,20 @@ function OverviewTab({
 
 const PHOTO_CONTENT_TYPES = [
   { id: "portrait", label: "Портрет" },
-  { id: "gaming_reaction", label: "Игровая реакция" },
-  { id: "gaming_chill", label: "Гейминг расслабон" },
-  { id: "instagram_lifestyle", label: "Instagram лайфстайл" },
-  { id: "instagram_glam", label: "Instagram глэм" },
+  { id: "pool_luxury", label: "Бассейн / Люкс" },
+  { id: "beach_sunset", label: "Пляж / Закат" },
+  { id: "instagram_lifestyle", label: "Лайфстайл" },
+  { id: "instagram_glam", label: "Глэм / Вечер" },
+  { id: "wine_evening", label: "Вино / Терраса" },
+  { id: "morning_coffee", label: "Кофе / Утро" },
+  { id: "travel_exotic", label: "Путешествие" },
+  { id: "fitness_gym", label: "Фитнес" },
   { id: "selfie", label: "Селфи" },
-  { id: "intimate_cozy", label: "Уютное домашнее" },
+  { id: "intimate_cozy", label: "Будуар" },
   { id: "full_body", label: "В полный рост" },
   { id: "outdoor", label: "На улице" },
+  { id: "gaming_reaction", label: "Гейм реакция" },
+  { id: "gaming_chill", label: "Гейм чилл" },
   { id: "custom", label: "Свой промт" },
 ];
 
@@ -1288,7 +1294,7 @@ function GenerateTab({
       {/* ===== VIDEO GENERATION ===== */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
         <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-          <Video className="h-5 w-5 text-violet-400" /> Генерация видео (Голос + Фото + Lip-sync)
+          <Video className="h-5 w-5 text-violet-400" /> Генерация видео (LoRA + Голос + Lip-sync)
         </h3>
         <div className="space-y-3">
           <textarea
@@ -1297,23 +1303,41 @@ function GenerateTab({
             className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
             rows={2}
           />
-          <button
-            onClick={onVideo}
-            disabled={videoLoading}
-            className="w-full bg-violet-600 hover:bg-violet-700 disabled:opacity-50 px-4 py-3 rounded-lg text-sm font-medium flex items-center justify-center gap-2 transition-all"
-          >
-            {videoLoading ? (
-              <>
-                <RefreshCw className="h-4 w-4 animate-spin" /> Генерация (~30сек)...
-              </>
-            ) : (
-              <>
-                <Zap className="h-4 w-4" /> Сгенерировать видео
-              </>
-            )}
-          </button>
+          {/* Video button — blocked without LoRA */}
+          {selected?.lora_training_status !== "trained" ? (
+            <div className="w-full bg-zinc-800 border border-amber-500/30 px-4 py-3 rounded-lg text-center">
+              <p className="text-sm text-amber-400 font-medium mb-1">
+                Видео заблокировано — сначала обучите LoRA
+              </p>
+              <p className="text-xs text-zinc-400">
+                {selected?.lora_training_status === "training" || selected?.lora_training_status === "sourcing_photos"
+                  ? "Обучение уже идёт... Подождите 5-15 минут."
+                  : "Перейдите в таб 'Обзор' и нажмите 'Обучить LoRA на реальных фото'"}
+              </p>
+            </div>
+          ) : (
+            <button
+              onClick={onVideo}
+              disabled={videoLoading}
+              className="w-full bg-violet-600 hover:bg-violet-700 disabled:opacity-50 px-4 py-3 rounded-lg text-sm font-medium flex items-center justify-center gap-2 transition-all"
+            >
+              {videoLoading ? (
+                <>
+                  <RefreshCw className="h-4 w-4 animate-spin" /> Генерация (~30сек)...
+                </>
+              ) : (
+                <>
+                  <Zap className="h-4 w-4" /> Сгенерировать видео (LoRA)
+                </>
+              )}
+            </button>
+          )}
           <p className="text-xs text-zinc-500">
-            Пайплайн: ElevenLabs v3 голос &rarr; fal.ai фото &rarr; OmniHuman lip-sync
+            {selected?.lora_training_status === "trained" ? (
+              <span className="text-green-400">LoRA → ElevenLabs v3 голос → fal.ai LoRA фото → OmniHuman lip-sync</span>
+            ) : (
+              <span className="text-amber-400">LoRA не обучена — видео недоступно</span>
+            )}
           </p>
 
           {videoResult && (
@@ -1323,15 +1347,49 @@ function GenerateTab({
                 : "bg-red-500/10 border border-red-500/30"
             }`}>
               {videoResult.success ? (
-                <div className="space-y-2">
-                  <div className="text-green-400 text-sm font-medium">
-                    Видео создано! ~${(videoResult.total_cost || 0).toFixed(4)}
-                  </div>
-                  {videoResult.steps?.map((s, i) => (
-                    <div key={i} className="text-xs text-zinc-400">
-                      {s.step}: {s.result?.success ? "OK" : String(s.result?.error || "?")}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="text-green-400 text-sm font-medium">
+                      Видео создано! ~${(videoResult.total_cost || 0).toFixed(4)}
                     </div>
-                  ))}
+                  </div>
+                  {/* Video player */}
+                  {(() => {
+                    const lipsyncStep = videoResult.steps?.find((s) => s.step === "lipsync");
+                    const res = lipsyncStep?.result as Record<string, unknown> | undefined;
+                    const videoObj = res?.video as Record<string, unknown> | undefined;
+                    const videoUrl = (videoObj?.url as string) || (res?.video_url as string);
+                    if (videoUrl) {
+                      return (
+                        <div className="space-y-2">
+                          <video
+                            controls
+                            className="w-full rounded-lg border border-zinc-700"
+                            src={videoUrl}
+                            preload="metadata"
+                          />
+                          <a
+                            href={videoUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            download
+                            className="inline-flex items-center gap-2 bg-violet-600 hover:bg-violet-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                          >
+                            <Download className="h-4 w-4" /> Скачать видео
+                          </a>
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
+                  {/* Step results */}
+                  <div className="flex flex-wrap gap-3 text-xs">
+                    {videoResult.steps?.map((s, i) => (
+                      <span key={i} className={s.result?.success ? "text-green-400" : "text-red-400"}>
+                        {s.step}: {s.result?.success ? "OK" : String(s.result?.error || "?")}
+                      </span>
+                    ))}
+                  </div>
                 </div>
               ) : (
                 <div className="text-red-400 text-sm">{videoResult.error}</div>
