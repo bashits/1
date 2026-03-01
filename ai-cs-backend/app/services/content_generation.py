@@ -97,6 +97,13 @@ LIPSYNC_MODELS = {
         "cost_per_second": 0.08,
         "best_for": ["talking_head", "fast", "natural"],
     },
+    "latentsync": {
+        "id": "fal-ai/latentsync",
+        "name": "LatentSync (Budget)",
+        "quality": 6,
+        "cost_per_second": 0.02,
+        "best_for": ["budget", "quick", "testing"],
+    },
     "veed": {
         "id": "veed/lipsync",
         "name": "VEED Lipsync",
@@ -113,6 +120,7 @@ VIDEO_MODELS = {
         "quality": 9,
         "cost_per_5s": 0.10,
         "best_for": ["realistic_humans", "movement"],
+        "durations": [5, 10],
     },
     "wan21": {
         "id": "fal-ai/wan-i2v",
@@ -120,8 +128,116 @@ VIDEO_MODELS = {
         "quality": 8,
         "cost_per_5s": 0.08,
         "best_for": ["general", "animation"],
+        "durations": [5],
     },
 }
+
+# ─── Duration options for video generation ────────────────────────────
+VIDEO_DURATION_OPTIONS = [3, 5, 10, 15]
+
+
+def calculate_video_cost(
+    duration_seconds: float = 3.0,
+    lipsync_model_key: str = "omnihuman",
+    photo_model_key: str = "lora",
+    include_i2v: bool = False,
+    i2v_model_key: str = "kling",
+    voice_engine: str = "elevenlabs",
+) -> dict:
+    """Calculate estimated cost for video generation pipeline BEFORE running it.
+
+    Returns detailed breakdown so user sees exact cost before spending money.
+    """
+    # Photo cost (LoRA inference or standard)
+    if photo_model_key == "lora":
+        photo_cost = 0.05  # LoRA inference via fal.ai
+    else:
+        model = IMAGE_MODELS.get(photo_model_key, IMAGE_MODELS["flux2_realism"])
+        photo_cost = model.get("cost_per_image", 0.025)
+
+    # Voice cost (ElevenLabs or free edge-tts)
+    if voice_engine == "elevenlabs":
+        # ElevenLabs charges ~$0.30/1000 chars, avg 3s clip ~ 50-80 chars
+        estimated_chars = max(50, duration_seconds * 20)  # ~20 chars per second
+        voice_cost = round(estimated_chars * 0.0003, 4)  # $0.30/1000 chars
+    else:
+        voice_cost = 0.0  # edge-tts is free
+
+    # Lipsync cost
+    ls_model = LIPSYNC_MODELS.get(lipsync_model_key, LIPSYNC_MODELS["omnihuman"])
+    cost_per_sec = ls_model.get("cost_per_second", 0.0)
+    cost_per_min = ls_model.get("cost_per_minute", 0.0)
+    if cost_per_sec:
+        lipsync_cost = round(cost_per_sec * duration_seconds, 4)
+    elif cost_per_min:
+        lipsync_cost = round(cost_per_min * duration_seconds / 60, 4)
+    else:
+        lipsync_cost = 0.0
+
+    # Optional I2V cost
+    i2v_cost = 0.0
+    if include_i2v:
+        i2v_model = VIDEO_MODELS.get(i2v_model_key, VIDEO_MODELS["kling"])
+        cost_5s = i2v_model.get("cost_per_5s", 0.10)
+        i2v_cost = round(cost_5s * (duration_seconds / 5.0), 4)
+
+    total = round(photo_cost + voice_cost + lipsync_cost + i2v_cost, 4)
+
+    return {
+        "duration_seconds": duration_seconds,
+        "breakdown": {
+            "photo": {"model": photo_model_key, "cost": photo_cost},
+            "voice": {"engine": voice_engine, "cost": voice_cost},
+            "lipsync": {
+                "model": lipsync_model_key,
+                "model_name": ls_model.get("name", lipsync_model_key),
+                "cost_per_second": cost_per_sec,
+                "cost": lipsync_cost,
+            },
+            "i2v": {"model": i2v_model_key, "cost": i2v_cost, "included": include_i2v},
+        },
+        "total_estimated": total,
+        "currency": "USD",
+    }
+
+
+def get_all_pricing() -> dict:
+    """Return full pricing info for all models — used by frontend cost calculator."""
+    return {
+        "duration_options": VIDEO_DURATION_OPTIONS,
+        "image_models": {
+            k: {"name": v["name"], "cost_per_image": v.get("cost_per_image", 0), "quality": v.get("quality", 5)}
+            for k, v in IMAGE_MODELS.items()
+        },
+        "lipsync_models": {
+            k: {
+                "name": v["name"],
+                "cost_per_second": v.get("cost_per_second", 0),
+                "cost_per_minute": v.get("cost_per_minute", 0),
+                "quality": v.get("quality", 5),
+                "best_for": v.get("best_for", []),
+            }
+            for k, v in LIPSYNC_MODELS.items()
+            if k != "veed"  # veed not reliable via fal.ai
+        },
+        "video_models": {
+            k: {
+                "name": v["name"],
+                "cost_per_5s": v.get("cost_per_5s", 0),
+                "quality": v.get("quality", 5),
+                "durations": v.get("durations", [5]),
+            }
+            for k, v in VIDEO_MODELS.items()
+        },
+        "lora": {
+            "training_cost": 2.50,
+            "inference_cost": 0.05,
+        },
+        "voice": {
+            "elevenlabs": {"cost_per_1000_chars": 0.30, "note": "Premium quality"},
+            "edge_tts": {"cost": 0.0, "note": "Free, lower quality"},
+        },
+    }
 
 
 # ─── Smart Prompt Engineering ─────────────────────────────────────────
@@ -685,12 +801,21 @@ async def generate_video_from_image(
             except Exception as e:
                 saved_file = {"url": video_url, "error": str(e)}
 
+    try:
+        duration_s = float(duration)
+    except Exception:
+        duration_s = 5.0
+
+    cost_per_5s = float(model_info.get("cost_per_5s", 0.10) or 0.10)
+    cost_estimate = round(cost_per_5s * (duration_s / 5.0), 4)
+
     return {
         "success": True,
         "video": saved_file,
         "model": model_id,
         "model_name": model_info["name"],
-        "cost_estimate": model_info.get("cost_per_5s", 0.10),
+        "duration_seconds": duration_s,
+        "cost_estimate": cost_estimate,
         "engine": "fal.ai",
     }
 

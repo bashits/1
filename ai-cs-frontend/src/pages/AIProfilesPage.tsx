@@ -14,6 +14,7 @@ import {
   VideoGenResult,
   PhotoResult,
   GalleryPhoto,
+  VideoCostEstimate,
   VoiceIdentity,
   ProfileLearningResponse,
   GeneratedPersona,
@@ -71,6 +72,9 @@ export default function AIProfilesPage() {
   );
   const [videoLoading, setVideoLoading] = useState(false);
   const [videoResult, setVideoResult] = useState<VideoGenResult | null>(null);
+  const [videoDuration, setVideoDuration] = useState<number>(3);
+  const [videoLipsyncModel, setVideoLipsyncModel] = useState("omnihuman");
+  const [videoCostEstimate, setVideoCostEstimate] = useState<VideoCostEstimate | null>(null);
 
   // Photo generation state
   const [photoPrompt, setPhotoPrompt] = useState("");
@@ -268,13 +272,25 @@ export default function AIProfilesPage() {
       const res = await api.generateProfileVideo(selected.id, {
         text: videoText,
         moment_type: momentType,
-        lipsync_model_key: "omnihuman",
+        duration_seconds: videoDuration,
+        lipsync_model_key: videoLipsyncModel,
       });
       setVideoResult(res);
     } catch (e) {
       setVideoResult({ success: false, error: String(e) });
     }
     setVideoLoading(false);
+  };
+
+  const fetchVideoCostEstimate = async (dur: number, lsModel: string) => {
+    try {
+      const est = await api.getVideoCostEstimate({
+        duration_seconds: dur,
+        lipsync_model_key: lsModel,
+        voice_engine: "elevenlabs",
+      });
+      setVideoCostEstimate(est);
+    } catch { /* ignore */ }
   };
 
   const handleGeneratePhoto = async () => {
@@ -710,6 +726,10 @@ export default function AIProfilesPage() {
                   scriptPreview={scriptPreview}
                   videoText={videoText} setVideoText={setVideoText}
                   videoLoading={videoLoading} videoResult={videoResult}
+                  videoDuration={videoDuration} setVideoDuration={setVideoDuration}
+                  videoLipsyncModel={videoLipsyncModel} setVideoLipsyncModel={setVideoLipsyncModel}
+                  videoCostEstimate={videoCostEstimate}
+                  onVideoCostEstimate={fetchVideoCostEstimate}
                   photoPrompt={photoPrompt} setPhotoPrompt={setPhotoPrompt}
                   photoContentType={photoContentType} setPhotoContentType={setPhotoContentType}
                   photoModel={photoModel} setPhotoModel={setPhotoModel}
@@ -988,11 +1008,26 @@ const PHOTO_MODELS = [
   { id: "flux2_pro", label: "FLUX 2 Pro (качество, $0.05)", cost: 0.05 },
 ];
 
+const VIDEO_DURATION_OPTIONS = [
+  { value: 3, label: "3s", desc: "Быстро" },
+  { value: 5, label: "5s", desc: "Стандарт" },
+  { value: 10, label: "10s", desc: "Длинный" },
+  { value: 15, label: "15s", desc: "Макс" },
+];
+
+const LIPSYNC_MODELS_UI = [
+  { id: "omnihuman", label: "OmniHuman-1 (топ качество)", quality: 10 },
+  { id: "kling_avatar", label: "Kling Avatar (быстро)", quality: 7 },
+  { id: "latentsync", label: "LatentSync (бюджет)", quality: 6 },
+];
+
 function GenerateTab({
   selected,
   voiceText, setVoiceText, momentType, setMomentType,
   voiceLoading, voiceResult, scriptPreview,
   videoText, setVideoText, videoLoading, videoResult,
+  videoDuration, setVideoDuration, videoLipsyncModel, setVideoLipsyncModel,
+  videoCostEstimate, onVideoCostEstimate,
   photoPrompt, setPhotoPrompt, photoContentType, setPhotoContentType,
   photoModel, setPhotoModel, photoUseRef, setPhotoUseRef,
   photoSetRef, setPhotoSetRef, photoLoading, photoResult,
@@ -1005,6 +1040,10 @@ function GenerateTab({
   scriptPreview: ScriptPreview | null;
   videoText: string; setVideoText: (v: string) => void;
   videoLoading: boolean; videoResult: VideoGenResult | null;
+  videoDuration: number; setVideoDuration: (v: number) => void;
+  videoLipsyncModel: string; setVideoLipsyncModel: (v: string) => void;
+  videoCostEstimate: VideoCostEstimate | null;
+  onVideoCostEstimate: (dur: number, lsModel: string) => void;
   photoPrompt: string; setPhotoPrompt: (v: string) => void;
   photoContentType: string; setPhotoContentType: (v: string) => void;
   photoModel: string; setPhotoModel: (v: string) => void;
@@ -1303,6 +1342,70 @@ function GenerateTab({
             className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
             rows={2}
           />
+
+          {/* Duration picker */}
+          <div>
+            <label className="text-xs text-zinc-400 mb-1 block">Длительность видео</label>
+            <div className="grid grid-cols-4 gap-2">
+              {VIDEO_DURATION_OPTIONS.map((d) => (
+                <button
+                  key={d.value}
+                  onClick={() => {
+                    setVideoDuration(d.value);
+                    onVideoCostEstimate(d.value, videoLipsyncModel);
+                  }}
+                  className={`px-3 py-2 rounded-lg text-xs font-medium transition-all text-center ${
+                    videoDuration === d.value
+                      ? "bg-violet-600 text-white ring-1 ring-violet-400"
+                      : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
+                  }`}
+                >
+                  <div className="text-sm font-bold">{d.label}</div>
+                  <div className="text-[10px] opacity-70">{d.desc}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Lipsync model selector */}
+          <div>
+            <label className="text-xs text-zinc-400 mb-1 block">Lip-sync модель</label>
+            <select
+              value={videoLipsyncModel}
+              onChange={(e) => {
+                setVideoLipsyncModel(e.target.value);
+                onVideoCostEstimate(videoDuration, e.target.value);
+              }}
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+            >
+              {LIPSYNC_MODELS_UI.map((m) => (
+                <option key={m.id} value={m.id}>{m.label}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Cost estimate */}
+          {videoCostEstimate && (
+            <div className="bg-zinc-800/60 border border-violet-500/20 rounded-lg p-3 space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-zinc-400 flex items-center gap-1">
+                  <DollarSign className="h-3 w-3" /> Предварительная стоимость
+                </span>
+                <span className="text-sm font-bold text-violet-300">
+                  ~${videoCostEstimate.total_estimated.toFixed(4)}
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-2 text-[10px] text-zinc-500">
+                <span>Фото: ${videoCostEstimate.breakdown.photo.cost.toFixed(3)}</span>
+                <span>Голос: ${videoCostEstimate.breakdown.voice.cost.toFixed(4)}</span>
+                <span>Lip-sync: ${videoCostEstimate.breakdown.lipsync.cost.toFixed(4)}</span>
+                {videoCostEstimate.breakdown.i2v.included && (
+                  <span>I2V: ${videoCostEstimate.breakdown.i2v.cost.toFixed(4)}</span>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Video button — blocked without LoRA */}
           {selected?.lora_training_status !== "trained" ? (
             <div className="w-full bg-zinc-800 border border-amber-500/30 px-4 py-3 rounded-lg text-center">
@@ -1327,14 +1430,14 @@ function GenerateTab({
                 </>
               ) : (
                 <>
-                  <Zap className="h-4 w-4" /> Сгенерировать видео (LoRA)
+                  <Zap className="h-4 w-4" /> Сгенерировать видео ({videoDuration}с{videoCostEstimate ? ` ~$${videoCostEstimate.total_estimated.toFixed(3)}` : ""})
                 </>
               )}
             </button>
           )}
           <p className="text-xs text-zinc-500">
             {selected?.lora_training_status === "trained" ? (
-              <span className="text-green-400">LoRA → ElevenLabs v3 голос → fal.ai LoRA фото → OmniHuman lip-sync</span>
+              <span className="text-green-400">LoRA → ElevenLabs v3 голос → fal.ai LoRA фото → {LIPSYNC_MODELS_UI.find(m => m.id === videoLipsyncModel)?.label || "Lip-sync"}</span>
             ) : (
               <span className="text-amber-400">LoRA не обучена — видео недоступно</span>
             )}

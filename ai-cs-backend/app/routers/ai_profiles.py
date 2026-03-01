@@ -50,6 +50,7 @@ from app.services.lora_service import (
     LORA_INFERENCE_CONFIG,
 )
 from app.services.real_photo_sourcer import source_photos_with_fallback
+from app.services.content_generation import calculate_video_cost, get_all_pricing, VIDEO_DURATION_OPTIONS
 
 router = APIRouter(prefix="/api/ai-profiles", tags=["ai-profiles"])
 
@@ -146,6 +147,9 @@ class TrainLoraRequest(BaseModel):
 class GenerateVideoRequest(BaseModel):
     text: str
     moment_type: str = "generic"
+    # Desired output duration in seconds (user-selectable for predictable cost)
+    duration_seconds: Optional[float] = None  # allowed: 3, 5, 10, 15
+
     photo_prompt: Optional[str] = None
     photo_model_key: str = "flux2_realism"
     lipsync_model_key: str = "omnihuman"
@@ -868,7 +872,27 @@ async def generate_video(
     if not audio_url:
         return {"success": False, "error": "Failed to upload audio for lip-sync"}
 
-    duration_seconds = float(voice_result.get("duration") or 3.0)
+    requested_duration = float(req.duration_seconds) if req.duration_seconds else None
+    if requested_duration is not None:
+        allowed = set(VIDEO_DURATION_OPTIONS)
+        if int(requested_duration) not in allowed:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid duration_seconds={requested_duration}. Allowed: {sorted(allowed)}",
+            )
+
+    voice_duration = float(voice_result.get("duration") or 3.0)
+
+    # Enforce upper bound to keep costs predictable
+    if requested_duration is not None and voice_duration > requested_duration + 0.2:
+        return {
+            "success": False,
+            "error": f"Voice is ~{voice_duration:.1f}s which exceeds selected duration {requested_duration:.0f}s. Shorten text or pick longer duration.",
+            "steps": [{"step": "voice", "result": voice_result}],
+        }
+
+    duration_seconds = requested_duration or voice_duration
+
     lipsync_result = await generate_lipsync_video(
         image_url=image_url,
         audio_url=audio_url,
@@ -879,10 +903,15 @@ async def generate_video(
     # Step 4 (optional): I2V from the same identity image
     i2v_result = None
     if req.generate_i2v:
+        # Most I2V endpoints only support 5s or 10s; map UI durations.
+        i2v_duration = "10" if duration_seconds >= 10 else "5"
+        if req.i2v_model_key == "wan21":
+            i2v_duration = "5"
         i2v_result = await generate_video_from_image(
             image_url=image_url,
             prompt=req.i2v_prompt,
             model_key=req.i2v_model_key,
+            duration=i2v_duration,
         )
 
     total_cost = round(
@@ -1211,6 +1240,37 @@ async def get_cost_estimate(task_type: str):
     if not costs:
         raise HTTPException(status_code=404, detail=f"Unknown task type: {task_type}")
     return {"task_type": task_type, "estimates": costs}
+
+
+@router.get("/pricing")
+async def get_pricing():
+    """Pricing & allowed durations for frontend real-time cost calculator."""
+    return get_all_pricing()
+
+
+@router.get("/video-cost-estimate")
+async def get_video_cost_estimate(
+    duration_seconds: float = Query(default=3.0, ge=1.0, le=60.0),
+    lipsync_model_key: str = "kling_avatar",
+    include_i2v: bool = False,
+    i2v_model_key: str = "kling",
+    voice_engine: str = "elevenlabs",
+):
+    # Validate against our discrete UI options
+    allowed = set(VIDEO_DURATION_OPTIONS)
+    if int(duration_seconds) not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid duration_seconds={duration_seconds}. Allowed: {sorted(allowed)}",
+        )
+    return calculate_video_cost(
+        duration_seconds=duration_seconds,
+        lipsync_model_key=lipsync_model_key,
+        photo_model_key="lora",
+        include_i2v=include_i2v,
+        i2v_model_key=i2v_model_key,
+        voice_engine=voice_engine,
+    )
 
 
 # ─── Profile Gallery (Cloud URLs, no local storage) ──────────────────

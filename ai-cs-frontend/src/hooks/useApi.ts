@@ -98,6 +98,13 @@ export const api = {
   getProfileContent: (id: number, type?: string) =>
     apiFetch<ContentItem[]>(`/api/ai-profiles/${id}/content${type ? `?content_type=${type}` : ""}`),
   getProfileCosts: (id: number) => apiFetch<CostBreakdown>(`/api/ai-profiles/${id}/costs`),
+  getPricing: () => apiFetch<PricingInfo>("/api/ai-profiles/pricing"),
+  getVideoCostEstimate: (params: VideoCostEstimateParams) =>
+    apiFetch<VideoCostEstimate>(`/api/ai-profiles/video-cost-estimate?${new URLSearchParams(
+      Object.entries(params)
+        .filter(([, v]) => v !== undefined)
+        .map(([k, v]) => [k, String(v)])
+    ).toString()}`),
   schedulePost: (id: number, data: SchedulePostReq) =>
     apiFetch<{ success: boolean }>(`/api/ai-profiles/${id}/schedule-post`, { method: "POST", body: JSON.stringify(data) }),
   getSocialPosts: (id: number, platform?: string) =>
@@ -667,6 +674,7 @@ export interface ProfileLearningResponse {
 export interface GenVideoReq {
   text: string;
   moment_type?: string;
+  duration_seconds?: number;
   photo_prompt?: string;
   photo_model_key?: string;
   lipsync_model_key?: string;
@@ -680,6 +688,35 @@ export interface VideoGenResult {
   total_cost?: number;
   steps?: { step: string; result: Record<string, unknown> }[];
   error?: string;
+}
+
+export interface PricingInfo {
+  duration_options: number[];
+  image_models: Record<string, { name: string; cost_per_image: number; quality: number }>;
+  lipsync_models: Record<string, { name: string; cost_per_second: number; cost_per_minute: number; quality: number; best_for: string[] }>;
+  video_models: Record<string, { name: string; cost_per_5s: number; quality: number; durations: number[] }>;
+  lora: { training_cost: number; inference_cost: number };
+  voice: { elevenlabs: { cost_per_1000_chars: number; note: string }; edge_tts: { cost: number; note: string } };
+}
+
+export interface VideoCostEstimateParams {
+  duration_seconds: number;
+  lipsync_model_key: string;
+  include_i2v?: boolean;
+  i2v_model_key?: string;
+  voice_engine?: string;
+}
+
+export interface VideoCostEstimate {
+  duration_seconds: number;
+  breakdown: {
+    photo: { model: string; cost: number };
+    voice: { engine: string; cost: number };
+    lipsync: { model: string; model_name: string; cost_per_second: number; cost: number };
+    i2v: { model: string; cost: number; included: boolean };
+  };
+  total_estimated: number;
+  currency: string;
 }
 
 // Content & Social
