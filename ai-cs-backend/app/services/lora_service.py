@@ -544,12 +544,15 @@ def build_lora_prompt(
         f"{hair_color} {hair_style} hair, {eye_color} eyes, {skin_tone} skin, {body_type} body"
     )
 
-    # Professional photography realism block — no AI look
+    # Professional photography realism block — maximum quality, no AI look
     realism = (
-        "RAW photo, shot on Sony A7IV 85mm f/1.4, natural skin texture with pores and imperfections, "
-        "subsurface scattering, individual hair strands visible, real catchlight in eyes, "
-        "professional color grading, film grain, no airbrushing, no plastic skin, "
-        "photojournalistic quality, editorial magazine photo"
+        "RAW photo, shot on Sony A7IV 85mm f/1.4 GM, natural skin texture with visible pores "
+        "and micro-imperfections, subsurface scattering on skin, individual hair strands visible, "
+        "real catchlight reflections in eyes, shallow depth of field with natural bokeh, "
+        "professional color grading with lifted blacks, subtle film grain, "
+        "no airbrushing, no plastic skin, no beauty filter, "
+        "photojournalistic quality, editorial magazine photography, "
+        "ultra detailed 8K UHD, natural ambient occlusion, micro-contrast"
     )
 
     scenes = {

@@ -615,8 +615,12 @@ async def generate_photo(
     if req.use_lora and lora_url and trigger_word and lora_status == "trained":
         appearance = profile.get("appearance", {})
         if req.prompt:
-            # Prepend trigger word to custom prompt
-            prompt = f"{trigger_word}, {req.prompt}"
+            # Smart prompt: detect Russian text and interpret into pro EN prompt
+            from app.services.smart_prompt_interpreter import is_russian_text, smart_prompt
+            if is_russian_text(req.prompt):
+                prompt = smart_prompt(req.prompt, appearance=appearance, trigger_word=trigger_word)
+            else:
+                prompt = f"{trigger_word}, {req.prompt}"
         else:
             prompt = build_lora_prompt(
                 trigger_word=trigger_word,
@@ -631,8 +635,8 @@ async def generate_photo(
             width=req.width,
             height=req.height,
             num_images=req.num_images,
-            guidance_scale=3.5,
-            num_inference_steps=28,
+            guidance_scale=LORA_INFERENCE_CONFIG["default_guidance_scale"],
+            num_inference_steps=LORA_INFERENCE_CONFIG["default_num_inference_steps"],
         )
         used_lora = result.get("lora_used", False)
     # Priority 2: Reference image based generation
@@ -1196,6 +1200,40 @@ async def generate_prompt(
     profile = _parse_profile(row)
     prompt = generate_image_prompt(profile, content_type, context)
     return {"prompt": prompt, "content_type": content_type}
+
+
+@router.post("/{profile_id}/interpret-prompt")
+async def interpret_prompt_endpoint(
+    profile_id: int,
+    text: str = "",
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Smart prompt interpreter: takes casual Russian text and returns structured EN prompt.
+
+    Example input: "красное платье на пляже"
+    Returns: full English prompt + detected elements (clothing, location, mood, etc.)
+    """
+    from app.services.smart_prompt_interpreter import interpret_prompt, is_russian_text
+
+    cursor = await db.execute("SELECT * FROM ai_profiles WHERE id = ?", (profile_id,))
+    row = await cursor.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    profile = _parse_profile(row)
+    appearance = profile.get("appearance", {})
+    trigger_word = profile.get("lora_trigger_word")
+
+    if is_russian_text(text):
+        result = interpret_prompt(text, appearance=appearance, trigger_word=trigger_word)
+    else:
+        result = {
+            "prompt": f"{trigger_word}, {text}" if trigger_word else text,
+            "content_type": "portrait",
+            "detected": {},
+            "original_text": text,
+        }
+
+    return result
 
 
 @router.post("/{profile_id}/generate-script")

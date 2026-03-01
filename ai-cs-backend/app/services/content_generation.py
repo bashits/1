@@ -242,10 +242,13 @@ def get_all_pricing() -> dict:
 
 # ─── Smart Prompt Engineering ─────────────────────────────────────────
 REALISM_BOOSTERS = (
-    "RAW photo, ultra realistic, natural skin texture with pores and imperfections, "
-    "subsurface scattering, natural hair strands, catchlight in eyes, "
-    "shot on Canon EOS R5 85mm f/1.4, shallow depth of field, "
-    "professional color grading, film grain"
+    "RAW photo, shot on Sony A7IV 85mm f/1.4 GM, natural skin texture with visible pores "
+    "and micro-imperfections, subsurface scattering on skin, individual hair strands visible, "
+    "real catchlight reflections in eyes, shallow depth of field with natural bokeh, "
+    "professional color grading with lifted blacks, subtle film grain, "
+    "no airbrushing, no plastic skin, no beauty filter, "
+    "photojournalistic quality, editorial magazine photography, "
+    "ultra detailed 8K UHD, natural ambient occlusion, micro-contrast"
 )
 
 NEGATIVE_QUALITY = (
@@ -255,7 +258,10 @@ NEGATIVE_QUALITY = (
     "extra limbs, disfigured, mutated, ugly, blurry eyes, cross-eyed, "
     "text, watermark, logo, blurry, low quality, overexposed, underexposed, "
     "oversaturated, beauty filter, face app, facetune, snapchat filter, "
-    "stock photo, clip art, render, fake, artificial"
+    "stock photo, clip art, render, fake, artificial, "
+    "HDR tonemapping, over-sharpened, chromatic aberration, lens flare, "
+    "doll-like, uncanny valley, symmetrical face, perfect skin, "
+    "instagram filter, VSCO preset, over-processed, neon glow on skin"
 )
 
 

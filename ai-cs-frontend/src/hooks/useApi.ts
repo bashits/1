@@ -98,6 +98,8 @@ export const api = {
   getProfileContent: (id: number, type?: string) =>
     apiFetch<ContentItem[]>(`/api/ai-profiles/${id}/content${type ? `?content_type=${type}` : ""}`),
   getProfileCosts: (id: number) => apiFetch<CostBreakdown>(`/api/ai-profiles/${id}/costs`),
+  interpretPrompt: (id: number, text: string) =>
+    apiFetch<PromptInterpretation>(`/api/ai-profiles/${id}/interpret-prompt?text=${encodeURIComponent(text)}`, { method: "POST" }),
   getPricing: () => apiFetch<PricingInfo>("/api/ai-profiles/pricing"),
   getVideoCostEstimate: (params: VideoCostEstimateParams) =>
     apiFetch<VideoCostEstimate>(`/api/ai-profiles/video-cost-estimate?${new URLSearchParams(
@@ -705,6 +707,21 @@ export interface VideoCostEstimateParams {
   include_i2v?: boolean;
   i2v_model_key?: string;
   voice_engine?: string;
+}
+
+export interface PromptInterpretation {
+  prompt: string;
+  content_type: string;
+  detected: {
+    clothing?: string[];
+    location?: string | null;
+    pose?: string | null;
+    mood?: string | null;
+    props?: string[];
+    lighting?: string | null;
+    colors?: string[];
+  };
+  original_text: string;
 }
 
 export interface VideoCostEstimate {

@@ -1083,7 +1083,7 @@ function GenerateTab({
             </div>
           </div>
 
-          {/* Custom prompt (shown when content_type is custom or always as optional) */}
+          {/* Custom prompt with smart interpreter hint */}
           <div>
             <label className="text-xs text-zinc-400 mb-1 block">
               Промт {photoContentType !== "custom" && "(необязательно, по умолчанию автогенерация)"}
@@ -1092,12 +1092,15 @@ function GenerateTab({
               value={photoPrompt}
               onChange={(e) => setPhotoPrompt(e.target.value)}
               placeholder={photoContentType === "custom"
-                ? "Опиши что хочешь сгенерировать..."
+                ? "Пиши на русском! Например: красное платье на пляже, селфи в кафе с кофе, в спортзале в топике..."
                 : "Оставь пустым — промт будет сгенерирован автоматически по типу контента"
               }
               className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
               rows={2}
             />
+            <p className="text-xs text-violet-400/70 mt-1">
+              Smart Prompt: пиши на русском — система сама переведёт в профессиональный EN промт с реализмом
+            </p>
           </div>
 
           {/* Model + options row */}
