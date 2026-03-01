@@ -455,31 +455,21 @@ async def generate_photo(
     data = result.get("data", {})
     images = data.get("images", [])
 
-    saved_files = []
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        for img in images:
-            img_url = img.get("url", "")
-            if img_url:
-                fname = f"photo_{uuid.uuid4().hex[:8]}.png"
-                fpath = GENERATED_DIR / "photos" / fname
-                try:
-                    img_resp = await client.get(img_url)
-                    if img_resp.status_code == 200:
-                        fpath.write_bytes(img_resp.content)
-                        saved_files.append({
-                            "filename": fname,
-                            "file_path": str(fpath),
-                            "url": img_url,
-                            "width": img.get("width", width),
-                            "height": img.get("height", height),
-                        })
-                except Exception as e:
-                    saved_files.append({"url": img_url, "error": str(e)})
+    # Cloud-only storage: use fal.ai CDN URLs directly, NO local downloads
+    cloud_files = []
+    for img in images:
+        img_url = img.get("url", "")
+        if img_url:
+            cloud_files.append({
+                "url": img_url,
+                "width": img.get("width", width),
+                "height": img.get("height", height),
+            })
 
     cost = model_info.get("cost_per_image", 0.01) * num_images
     return {
         "success": True,
-        "images": saved_files,
+        "images": cloud_files,
         "model": model_id,
         "model_name": model_info.get("name", model_id),
         "prompt": prompt,
@@ -546,28 +536,19 @@ async def generate_photo_with_face(
     image = data.get("image") or (images[0] if images else {})
     img_url = image.get("url", "") if isinstance(image, dict) else ""
 
-    saved_file = None
+    # Cloud-only: use fal.ai CDN URL directly, NO local download
+    cloud_file = None
     if img_url:
-        fname = f"face_{uuid.uuid4().hex[:8]}.png"
-        fpath = GENERATED_DIR / "photos" / fname
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            try:
-                img_resp = await client.get(img_url)
-                if img_resp.status_code == 200:
-                    fpath.write_bytes(img_resp.content)
-                    saved_file = {
-                        "filename": fname,
-                        "file_path": str(fpath),
-                        "url": img_url,
-                        "width": image.get("width", width) if isinstance(image, dict) else width,
-                        "height": image.get("height", height) if isinstance(image, dict) else height,
-                    }
-            except Exception as e:
-                saved_file = {"url": img_url, "error": str(e)}
+        cloud_file = {
+            "url": img_url,
+            "width": image.get("width", width) if isinstance(image, dict) else width,
+            "height": image.get("height", height) if isinstance(image, dict) else height,
+        }
 
     return {
         "success": True,
-        "image": saved_file,
+        "image": cloud_file,
+        "images": [cloud_file] if cloud_file else [],
         "model": model_id,
         "method": "flux2_pro" if use_flux2 else "ip_adapter",
         "prompt": prompt,

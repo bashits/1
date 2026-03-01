@@ -483,16 +483,18 @@ async def generate_photo(
         per_image_cost = float(result.get("cost_estimate", 0.0) or 0.0)
         total_cost = round(per_image_cost * max(len(images), req.num_images), 4)
 
+        gallery_ids = []
         for img in images:
+            img_url = img.get("url", "")
+            # Save to content_items (legacy)
             await db.execute(
-                """INSERT INTO content_items (profile_id, content_type, title, prompt, file_path, file_url, cost, status, metadata)
-                   VALUES (?, 'photo', ?, ?, ?, ?, ?, 'completed', ?)""",
+                """INSERT INTO content_items (profile_id, content_type, title, prompt, file_url, cost, status, metadata)
+                   VALUES (?, 'photo', ?, ?, ?, ?, 'completed', ?)""",
                 (
                     profile_id,
                     f"Photo: {req.content_type}",
                     prompt,
-                    img.get("file_path"),
-                    img.get("url"),
+                    img_url,
                     per_image_cost,
                     json.dumps(
                         {
@@ -504,6 +506,29 @@ async def generate_photo(
                     ),
                 ),
             )
+            # Save to profile_gallery (cloud URL only — no local files)
+            if img_url:
+                cursor_g = await db.execute(
+                    """INSERT INTO profile_gallery (profile_id, image_url, content_type, prompt, model_key, is_reference, cost, metadata)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        profile_id, img_url, req.content_type, prompt,
+                        req.model_key, 1 if req.set_as_reference else 0,
+                        per_image_cost,
+                        json.dumps({"model": result.get("model"), "used_reference_images": used_reference_images}),
+                    ),
+                )
+                gallery_ids.append(cursor_g.lastrowid)
+
+            # Record in prompt_learning for auto-improvement
+            try:
+                await db.execute(
+                    """INSERT INTO prompt_learning (profile_id, prompt_type, original_prompt, model_key, content_type, success_score)
+                       VALUES (?, 'photo', ?, ?, ?, 0.5)""",
+                    (profile_id, prompt, req.model_key, req.content_type),
+                )
+            except Exception:
+                pass
 
         if req.set_as_reference and images:
             new_ref = images[0].get("url")
@@ -515,6 +540,28 @@ async def generate_photo(
                     (json.dumps(merged), profile_id),
                 )
 
+        # Update profile memory with generation history
+        try:
+            cursor_m = await db.execute("SELECT memory FROM ai_profiles WHERE id = ?", (profile_id,))
+            mem_row = await cursor_m.fetchone()
+            memory = json.loads(mem_row["memory"]) if mem_row and isinstance(mem_row["memory"], str) else {}
+            gen_history = memory.get("generation_history", [])
+            gen_history.insert(0, {
+                "type": "photo", "content_type": req.content_type,
+                "model": req.model_key, "cost": total_cost,
+                "count": len(images), "timestamp": datetime.utcnow().isoformat(),
+                "gallery_ids": gallery_ids,
+            })
+            memory["generation_history"] = gen_history[:100]  # Keep last 100
+            memory["last_photo_generated"] = datetime.utcnow().isoformat()
+            memory["total_photos_generated"] = memory.get("total_photos_generated", 0) + len(images)
+            await db.execute(
+                "UPDATE ai_profiles SET memory = ? WHERE id = ?",
+                (json.dumps(memory), profile_id),
+            )
+        except Exception:
+            pass
+
         await db.execute(
             "UPDATE ai_profiles SET total_photos = total_photos + ?, total_cost = total_cost + ?, updated_at = datetime('now') WHERE id = ?",
             (len(images) or req.num_images, total_cost, profile_id),
@@ -523,6 +570,7 @@ async def generate_photo(
 
         result["used_reference_images"] = used_reference_images
         result["total_cost"] = total_cost
+        result["gallery_ids"] = gallery_ids
 
     return result
 
@@ -944,3 +992,278 @@ async def get_cost_estimate(task_type: str):
     if not costs:
         raise HTTPException(status_code=404, detail=f"Unknown task type: {task_type}")
     return {"task_type": task_type, "estimates": costs}
+
+
+# ─── Profile Gallery (Cloud URLs, no local storage) ──────────────────
+
+@router.get("/{profile_id}/gallery")
+async def get_gallery(
+    profile_id: int,
+    content_type: Optional[str] = None,
+    favorites_only: bool = False,
+    references_only: bool = False,
+    limit: int = Query(default=50, le=200),
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Get all generated photos for this girl. Stored as cloud URLs — no server storage used."""
+    query = "SELECT * FROM profile_gallery WHERE profile_id = ?"
+    params: list = [profile_id]
+    if content_type:
+        query += " AND content_type = ?"
+        params.append(content_type)
+    if favorites_only:
+        query += " AND is_favorite = 1"
+    if references_only:
+        query += " AND is_reference = 1"
+    query += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
+
+    cursor = await db.execute(query, params)
+    rows = await cursor.fetchall()
+    result = []
+    for row in rows:
+        d = dict(row)
+        if "metadata" in d and isinstance(d["metadata"], str):
+            try:
+                d["metadata"] = json.loads(d["metadata"])
+            except Exception:
+                d["metadata"] = {}
+        result.append(d)
+    return {"gallery": result, "total": len(result)}
+
+
+@router.post("/{profile_id}/gallery/{photo_id}/approve")
+async def approve_gallery_photo(
+    profile_id: int, photo_id: int,
+    set_as_reference: bool = False,
+    is_favorite: bool = False,
+    quality_rating: Optional[int] = None,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Approve/rate a generated photo. Optionally set as reference for identity lock."""
+    cursor = await db.execute(
+        "SELECT * FROM profile_gallery WHERE id = ? AND profile_id = ?",
+        (photo_id, profile_id),
+    )
+    photo = await cursor.fetchone()
+    if not photo:
+        raise HTTPException(status_code=404, detail="Photo not found")
+
+    updates = ["is_approved = 1"]
+    params: list = []
+    if is_favorite:
+        updates.append("is_favorite = 1")
+    if quality_rating is not None:
+        updates.append("quality_rating = ?")
+        params.append(quality_rating)
+
+    params.append(photo_id)
+    await db.execute(f"UPDATE profile_gallery SET {', '.join(updates)} WHERE id = ?", params)
+
+    # Set as reference image for identity lock
+    if set_as_reference:
+        await db.execute(
+            "UPDATE profile_gallery SET is_reference = 1 WHERE id = ? AND profile_id = ?",
+            (photo_id, profile_id),
+        )
+        # Update profile reference_images array
+        cursor2 = await db.execute("SELECT reference_images FROM ai_profiles WHERE id = ?", (profile_id,))
+        row2 = await cursor2.fetchone()
+        if row2:
+            refs = json.loads(row2["reference_images"]) if isinstance(row2["reference_images"], str) else []
+            photo_url = dict(photo)["image_url"]
+            if photo_url not in refs:
+                refs.insert(0, photo_url)
+                refs = refs[:4]  # Max 4 reference images
+            await db.execute(
+                "UPDATE ai_profiles SET reference_images = ?, updated_at = datetime('now') WHERE id = ?",
+                (json.dumps(refs), profile_id),
+            )
+
+    # Record in prompt_learning for auto-improvement
+    photo_dict = dict(photo)
+    if quality_rating and quality_rating >= 4:
+        try:
+            await db.execute(
+                """INSERT INTO prompt_learning (profile_id, prompt_type, original_prompt, model_key, content_type, success_score, user_rating)
+                   VALUES (?, 'photo', ?, ?, ?, ?, ?)""",
+                (profile_id, photo_dict.get("prompt", ""), photo_dict.get("model_key", ""),
+                 photo_dict.get("content_type", ""), quality_rating / 5.0, quality_rating),
+            )
+        except Exception:
+            pass
+
+    await db.commit()
+    return {"success": True, "message": "Photo approved", "set_as_reference": set_as_reference}
+
+
+@router.delete("/{profile_id}/gallery/{photo_id}")
+async def delete_gallery_photo(
+    profile_id: int, photo_id: int,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Delete a photo from gallery (just removes DB record, cloud URL stays)."""
+    await db.execute(
+        "DELETE FROM profile_gallery WHERE id = ? AND profile_id = ?",
+        (photo_id, profile_id),
+    )
+    await db.commit()
+    return {"success": True}
+
+
+# ─── Voice Identity (unique voice per girl) ──────────────────────────
+
+@router.get("/{profile_id}/voice-identity")
+async def get_voice_identity(
+    profile_id: int,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Get the unique voice identity for this girl."""
+    cursor = await db.execute(
+        "SELECT * FROM voice_identity WHERE profile_id = ?", (profile_id,)
+    )
+    row = await cursor.fetchone()
+    if not row:
+        # Return default from profile
+        cursor2 = await db.execute("SELECT * FROM ai_profiles WHERE id = ?", (profile_id,))
+        profile_row = await cursor2.fetchone()
+        if not profile_row:
+            raise HTTPException(status_code=404, detail="Profile not found")
+        profile = _parse_profile(profile_row)
+        vc = profile.get("voice_config", {})
+        return {
+            "profile_id": profile_id,
+            "has_identity": False,
+            "provider": "elevenlabs",
+            "voice_id": profile.get("elevenlabs_voice_id"),
+            "voice_settings": vc,
+            "audio_tags": profile.get("voice_audio_tags", []),
+        }
+
+    d = dict(row)
+    for k in ("voice_settings", "audio_tags", "sample_urls", "personality_traits"):
+        if k in d and isinstance(d[k], str):
+            try:
+                d[k] = json.loads(d[k])
+            except Exception:
+                d[k] = [] if k != "voice_settings" else {}
+    d["has_identity"] = True
+    return d
+
+
+@router.put("/{profile_id}/voice-identity")
+async def update_voice_identity(
+    profile_id: int,
+    voice_id: Optional[str] = None,
+    voice_name: Optional[str] = None,
+    speaking_style: Optional[str] = None,
+    language: Optional[str] = None,
+    personality_traits: Optional[list[str]] = None,
+    audio_tags: Optional[list[str]] = None,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Create or update voice identity for this girl."""
+    cursor = await db.execute("SELECT id FROM ai_profiles WHERE id = ?", (profile_id,))
+    if not await cursor.fetchone():
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    cursor2 = await db.execute("SELECT id FROM voice_identity WHERE profile_id = ?", (profile_id,))
+    existing = await cursor2.fetchone()
+
+    if existing:
+        updates = []
+        params: list = []
+        if voice_id is not None:
+            updates.append("voice_id = ?")
+            params.append(voice_id)
+        if voice_name is not None:
+            updates.append("voice_name = ?")
+            params.append(voice_name)
+        if speaking_style is not None:
+            updates.append("speaking_style = ?")
+            params.append(speaking_style)
+        if language is not None:
+            updates.append("language = ?")
+            params.append(language)
+        if personality_traits is not None:
+            updates.append("personality_traits = ?")
+            params.append(json.dumps(personality_traits))
+        if audio_tags is not None:
+            updates.append("audio_tags = ?")
+            params.append(json.dumps(audio_tags))
+        updates.append("updated_at = datetime('now')")
+        params.append(profile_id)
+        await db.execute(
+            f"UPDATE voice_identity SET {', '.join(updates)} WHERE profile_id = ?",
+            params,
+        )
+    else:
+        await db.execute(
+            """INSERT INTO voice_identity (profile_id, voice_id, voice_name, speaking_style, language, personality_traits, audio_tags)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (profile_id, voice_id, voice_name, speaking_style or "natural",
+             language or "en", json.dumps(personality_traits or []),
+             json.dumps(audio_tags or [])),
+        )
+
+    # Also update main profile
+    if voice_id:
+        await db.execute(
+            "UPDATE ai_profiles SET elevenlabs_voice_id = ?, updated_at = datetime('now') WHERE id = ?",
+            (voice_id, profile_id),
+        )
+    if audio_tags:
+        await db.execute(
+            "UPDATE ai_profiles SET voice_audio_tags = ?, updated_at = datetime('now') WHERE id = ?",
+            (json.dumps(audio_tags), profile_id),
+        )
+
+    await db.commit()
+    return {"success": True, "message": "Voice identity updated"}
+
+
+# ─── Prompt Learning / Auto-improvement ──────────────────────────────
+
+@router.get("/{profile_id}/learning")
+async def get_learning(
+    profile_id: int,
+    prompt_type: Optional[str] = None,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Get prompt learning data for this girl — what works best."""
+    query = "SELECT * FROM prompt_learning WHERE profile_id = ?"
+    params: list = [profile_id]
+    if prompt_type:
+        query += " AND prompt_type = ?"
+        params.append(prompt_type)
+    query += " ORDER BY success_score DESC, generation_count DESC LIMIT 50"
+
+    cursor = await db.execute(query, params)
+    rows = await cursor.fetchall()
+    result = []
+    for row in rows:
+        d = dict(row)
+        if "auto_features" in d and isinstance(d["auto_features"], str):
+            try:
+                d["auto_features"] = json.loads(d["auto_features"])
+            except Exception:
+                d["auto_features"] = {}
+        result.append(d)
+
+    # Build summary of best performing content types
+    type_scores: dict = {}
+    for r in result:
+        ct = r.get("content_type", "unknown")
+        if ct not in type_scores:
+            type_scores[ct] = {"count": 0, "total_score": 0.0, "best_prompt": ""}
+        type_scores[ct]["count"] += r.get("generation_count", 1)
+        type_scores[ct]["total_score"] += r.get("success_score", 0.0)
+        if r.get("success_score", 0) > type_scores[ct]["total_score"] / max(type_scores[ct]["count"], 1):
+            type_scores[ct]["best_prompt"] = r.get("original_prompt", "")
+
+    return {
+        "profile_id": profile_id,
+        "learning_data": result,
+        "content_type_performance": type_scores,
+        "total_learned_prompts": len(result),
+    }

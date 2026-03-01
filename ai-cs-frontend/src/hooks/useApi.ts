@@ -107,6 +107,22 @@ export const api = {
   setElevenLabsKey: (api_key: string) =>
     apiFetch<{ success: boolean }>("/api/ai-profiles/set-elevenlabs-key", { method: "POST", body: JSON.stringify({ api_key }) }),
 
+  // Profile Gallery (cloud URLs, no local storage)
+  getProfileGallery: (id: number, contentType?: string) =>
+    apiFetch<ProfileGalleryResponse>(`/api/ai-profiles/${id}/gallery${contentType ? `?content_type=${contentType}` : ""}`),
+  approveGalleryPhoto: (profileId: number, photoId: number, opts: { set_as_reference?: boolean; is_favorite?: boolean; quality_rating?: number }) =>
+    apiFetch<{ success: boolean }>(`/api/ai-profiles/${profileId}/gallery/${photoId}/approve?set_as_reference=${opts.set_as_reference || false}&is_favorite=${opts.is_favorite || false}${opts.quality_rating ? `&quality_rating=${opts.quality_rating}` : ""}`, { method: "POST" }),
+  deleteGalleryPhoto: (profileId: number, photoId: number) =>
+    apiFetch<{ success: boolean }>(`/api/ai-profiles/${profileId}/gallery/${photoId}`, { method: "DELETE" }),
+
+  // Voice Identity (unique voice per girl)
+  getVoiceIdentity: (id: number) => apiFetch<VoiceIdentity>(`/api/ai-profiles/${id}/voice-identity`),
+  updateVoiceIdentity: (id: number, data: Partial<VoiceIdentityUpdate>) =>
+    apiFetch<{ success: boolean }>(`/api/ai-profiles/${id}/voice-identity?${new URLSearchParams(Object.entries(data).filter(([,v]) => v !== undefined).map(([k,v]) => [k, Array.isArray(v) ? JSON.stringify(v) : String(v)])).toString()}`, { method: "PUT" }),
+
+  // Prompt Learning / Auto-improvement
+  getProfileLearning: (id: number) => apiFetch<ProfileLearningResponse>(`/api/ai-profiles/${id}/learning`),
+
   // Tool Registry
   getTools: (category?: string) =>
     apiFetch<Tool[]>(`/api/tools/${category ? `?category=${category}` : ""}`),
@@ -483,14 +499,86 @@ export interface GenPhotoReq {
 
 export interface PhotoResult {
   success: boolean;
-  images?: { filename: string; file_path: string; url: string; width: number; height: number }[];
+  images?: { url: string; width: number; height: number }[];
   model?: string;
   model_name?: string;
   prompt?: string;
   cost_estimate?: number;
   total_cost?: number;
   used_reference_images?: boolean;
+  gallery_ids?: number[];
   error?: string;
+}
+
+// Gallery types
+export interface GalleryPhoto {
+  id: number;
+  profile_id: number;
+  image_url: string;
+  thumbnail_url: string | null;
+  content_type: string;
+  prompt: string | null;
+  model_key: string | null;
+  is_reference: number;
+  is_approved: number;
+  is_favorite: number;
+  quality_rating: number | null;
+  metadata: Record<string, unknown>;
+  cost: number;
+  created_at: string;
+}
+
+export interface ProfileGalleryResponse {
+  gallery: GalleryPhoto[];
+  total: number;
+}
+
+// Voice Identity types
+export interface VoiceIdentity {
+  profile_id: number;
+  has_identity: boolean;
+  provider: string;
+  voice_id: string | null;
+  voice_name: string | null;
+  voice_settings: Record<string, unknown>;
+  audio_tags: string[];
+  sample_urls?: string[];
+  personality_traits?: string[];
+  speaking_style?: string;
+  language?: string;
+  total_generations?: number;
+}
+
+export interface VoiceIdentityUpdate {
+  voice_id: string;
+  voice_name: string;
+  speaking_style: string;
+  language: string;
+  personality_traits: string[];
+  audio_tags: string[];
+}
+
+// Learning types
+export interface LearningEntry {
+  id: number;
+  profile_id: number;
+  prompt_type: string;
+  original_prompt: string;
+  refined_prompt: string | null;
+  model_key: string | null;
+  content_type: string | null;
+  success_score: number;
+  user_rating: number | null;
+  auto_features: Record<string, unknown>;
+  generation_count: number;
+  created_at: string;
+}
+
+export interface ProfileLearningResponse {
+  profile_id: number;
+  learning_data: LearningEntry[];
+  content_type_performance: Record<string, { count: number; total_score: number; best_prompt: string }>;
+  total_learned_prompts: number;
 }
 
 export interface GenVideoReq {

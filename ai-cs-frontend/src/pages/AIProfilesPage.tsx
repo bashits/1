@@ -13,10 +13,13 @@ import {
   MemoryData,
   VideoGenResult,
   PhotoResult,
+  GalleryPhoto,
+  VoiceIdentity,
+  ProfileLearningResponse,
 } from "@/hooks/useApi";
 import {
   Plus, Sparkles, Trash2, Mic, Video, Image, Brain, Share2,
-  DollarSign, Play, Eye, RefreshCw, Send, Settings2, Zap,
+  DollarSign, Play, Eye, RefreshCw, Send, Zap,
   Volume2, FileText, ChevronRight, Hash, Clock, BarChart3,
   Camera, Download, Star,
 } from "lucide-react";
@@ -501,6 +504,7 @@ export default function AIProfilesPage() {
                   memory={memory} voiceSamples={voiceSamples}
                   memoryNotes={memoryNotes} setMemoryNotes={setMemoryNotes}
                   onUpdateMemory={handleUpdateMemory}
+                  selected={selected}
                 />
               )}
             </>
@@ -1169,117 +1173,369 @@ function SocialTab({
 /* ========== BRAIN TAB ========== */
 
 function BrainTab({
-  memory, voiceSamples, memoryNotes, setMemoryNotes, onUpdateMemory,
+  memory, voiceSamples, memoryNotes, setMemoryNotes, onUpdateMemory, selected,
 }: {
   memory: MemoryData | null;
   voiceSamples: VoiceSample[];
   memoryNotes: string;
   setMemoryNotes: (v: string) => void;
   onUpdateMemory: () => void;
+  selected: AIProfile | null;
 }) {
+  const [gallery, setGallery] = useState<GalleryPhoto[]>([]);
+  const [voiceId, setVoiceId] = useState<VoiceIdentity | null>(null);
+  const [learning, setLearning] = useState<ProfileLearningResponse | null>(null);
+  const [brainSection, setBrainSection] = useState<"memory" | "gallery" | "voice" | "learning">("memory");
+
+  useEffect(() => {
+    if (!selected) return;
+    api.getProfileGallery(selected.id).then((r) => setGallery(r.gallery)).catch(() => {});
+    api.getVoiceIdentity(selected.id).then(setVoiceId).catch(() => {});
+    api.getProfileLearning(selected.id).then(setLearning).catch(() => {});
+  }, [selected]);
+
+  const handleApprove = async (photoId: number, asRef: boolean) => {
+    if (!selected) return;
+    await api.approveGalleryPhoto(selected.id, photoId, { set_as_reference: asRef, quality_rating: 5 });
+    const r = await api.getProfileGallery(selected.id);
+    setGallery(r.gallery);
+  };
+
+  const handleDeletePhoto = async (photoId: number) => {
+    if (!selected) return;
+    await api.deleteGalleryPhoto(selected.id, photoId);
+    setGallery(gallery.filter((g) => g.id !== photoId));
+  };
+
   const memStats = (memory?.memory?.stats || {}) as Record<string, number>;
   const memNotes = memory?.memory?.personality_notes;
   const memTags = memory?.memory?.favorite_tags as string[] | undefined;
+  const genHistory = (memory?.memory?.generation_history || []) as { type: string; content_type: string; cost: number; timestamp: string }[];
+
+  const BRAIN_SECTIONS = [
+    { id: "memory" as const, label: "Память", icon: Brain },
+    { id: "gallery" as const, label: `Галерея (${gallery.length})`, icon: Image },
+    { id: "voice" as const, label: "Голос", icon: Volume2 },
+    { id: "learning" as const, label: `Обучение (${learning?.total_learned_prompts || 0})`, icon: BarChart3 },
+  ];
 
   return (
     <div className="space-y-4">
-      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
-        <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-          <Brain className="h-5 w-5 text-purple-400" /> Память и обучение
-        </h3>
-        {memory && (
-          <div className="space-y-3">
-            <div className="grid grid-cols-4 gap-3">
-              {[
-                { label: "Контент", value: memStats.total_content || 0 },
-                { label: "Голоса", value: memStats.total_voice_samples || 0 },
-                { label: "Посты", value: memStats.total_social_posts || 0 },
-                { label: "Потрачено", value: "$" + (memStats.total_cost || 0).toFixed(2) },
-              ].map((s) => (
-                <div key={s.label} className="bg-zinc-800 rounded-lg p-3 text-center">
-                  <div className="text-lg font-bold">{s.value}</div>
-                  <div className="text-xs text-zinc-500">{s.label}</div>
+      {/* Section tabs */}
+      <div className="flex gap-2">
+        {BRAIN_SECTIONS.map((s) => (
+          <button
+            key={s.id}
+            onClick={() => setBrainSection(s.id)}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-all ${
+              brainSection === s.id
+                ? "bg-purple-600 text-white"
+                : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
+            }`}
+          >
+            <s.icon className="h-3.5 w-3.5" /> {s.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ===== MEMORY SECTION ===== */}
+      {brainSection === "memory" && (
+        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
+          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+            <Brain className="h-5 w-5 text-purple-400" /> Память профиля
+          </h3>
+          {memory && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-4 gap-3">
+                {[
+                  { label: "Контент", value: memStats.total_content || 0 },
+                  { label: "Голоса", value: memStats.total_voice_samples || 0 },
+                  { label: "Посты", value: memStats.total_social_posts || 0 },
+                  { label: "Потрачено", value: "$" + (memStats.total_cost || 0).toFixed(2) },
+                ].map((s) => (
+                  <div key={s.label} className="bg-zinc-800 rounded-lg p-3 text-center">
+                    <div className="text-lg font-bold">{s.value}</div>
+                    <div className="text-xs text-zinc-500">{s.label}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="bg-zinc-800 rounded-lg p-4">
+                <div className="text-xs text-zinc-400 mb-1">Заметки</div>
+                <div className="text-sm">{String(memNotes || "Нет заметок")}</div>
+              </div>
+              {memTags && memTags.length > 0 && (
+                <div className="bg-zinc-800 rounded-lg p-4">
+                  <div className="text-xs text-zinc-400 mb-2">Любимые аудио-теги</div>
+                  <div className="flex flex-wrap gap-1">
+                    {memTags.map((tag) => (
+                      <span key={tag} className="text-xs bg-violet-500/20 text-violet-300 px-2 py-0.5 rounded">
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {/* Generation history */}
+              {genHistory.length > 0 && (
+                <div className="bg-zinc-800 rounded-lg p-4">
+                  <div className="text-xs text-zinc-400 mb-2">История генераций (последние 10)</div>
+                  <div className="space-y-1">
+                    {genHistory.slice(0, 10).map((h, i) => (
+                      <div key={i} className="flex items-center justify-between text-xs">
+                        <span className="text-zinc-300">
+                          {h.type === "photo" ? "Фото" : h.type} &middot; {h.content_type}
+                        </span>
+                        <span className="text-zinc-500">
+                          ${(h.cost || 0).toFixed(3)} &middot; {h.timestamp?.slice(0, 10)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div>
+                <textarea
+                  value={memoryNotes}
+                  onChange={(e) => setMemoryNotes(e.target.value)}
+                  className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                  rows={2}
+                  placeholder="Добавь информацию о персонаже..."
+                />
+                <button
+                  onClick={onUpdateMemory}
+                  disabled={!memoryNotes}
+                  className="mt-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 px-4 py-2 rounded-lg text-sm"
+                >
+                  Обновить память
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ===== GALLERY SECTION (Cloud URLs) ===== */}
+      {brainSection === "gallery" && (
+        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
+          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+            <Image className="h-5 w-5 text-emerald-400" /> Галерея фото (облако, {gallery.length} шт)
+          </h3>
+          {gallery.length === 0 ? (
+            <div className="text-center text-zinc-500 text-sm py-8">
+              Нет фото. Сгенерируй во вкладке "Генерация"
+            </div>
+          ) : (
+            <div className="grid grid-cols-3 gap-3">
+              {gallery.map((photo) => (
+                <div key={photo.id} className="relative group">
+                  <img
+                    src={photo.image_url}
+                    alt={photo.content_type}
+                    className={`w-full aspect-square object-cover rounded-lg border ${
+                      photo.is_reference ? "border-amber-500 ring-2 ring-amber-500/30" : "border-zinc-700"
+                    }`}
+                    loading="lazy"
+                  />
+                  {/* Badges */}
+                  <div className="absolute top-1 left-1 flex gap-1">
+                    {photo.is_reference === 1 && (
+                      <span className="bg-amber-500 text-black text-[9px] px-1.5 py-0.5 rounded font-bold">REF</span>
+                    )}
+                    {photo.is_favorite === 1 && (
+                      <span className="bg-pink-500 text-white text-[9px] px-1.5 py-0.5 rounded">FAV</span>
+                    )}
+                  </div>
+                  {/* Hover actions */}
+                  <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity rounded-lg flex flex-col items-center justify-center gap-2">
+                    <div className="text-xs text-zinc-300">{photo.content_type}</div>
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => handleApprove(photo.id, true)}
+                        className="bg-amber-600 hover:bg-amber-700 text-white text-xs px-2 py-1 rounded"
+                      >
+                        <Star className="h-3 w-3 inline" /> Референс
+                      </button>
+                      <a
+                        href={photo.image_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="bg-zinc-600 hover:bg-zinc-500 text-white text-xs px-2 py-1 rounded"
+                      >
+                        <Download className="h-3 w-3 inline" /> Скачать
+                      </a>
+                      <button
+                        onClick={() => handleDeletePhoto(photo.id)}
+                        className="bg-red-600 hover:bg-red-700 text-white text-xs px-2 py-1 rounded"
+                      >
+                        <Trash2 className="h-3 w-3 inline" />
+                      </button>
+                    </div>
+                    <div className="text-[10px] text-zinc-400">
+                      ${photo.cost.toFixed(3)} &middot; {photo.created_at?.slice(0, 10)}
+                    </div>
+                  </div>
                 </div>
               ))}
             </div>
-            <div className="bg-zinc-800 rounded-lg p-4">
-              <div className="text-xs text-zinc-400 mb-1">Заметки</div>
-              <div className="text-sm">{String(memNotes || "Нет заметок")}</div>
-            </div>
-            {memTags && memTags.length > 0 && (
-              <div className="bg-zinc-800 rounded-lg p-4">
-                <div className="text-xs text-zinc-400 mb-2">Любимые аудио-теги</div>
-                <div className="flex flex-wrap gap-1">
-                  {memTags.map((tag) => (
-                    <span key={tag} className="text-xs bg-violet-500/20 text-violet-300 px-2 py-0.5 rounded">
-                      {tag}
-                    </span>
-                  ))}
+          )}
+        </div>
+      )}
+
+      {/* ===== VOICE IDENTITY SECTION ===== */}
+      {brainSection === "voice" && (
+        <div className="space-y-4">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
+            <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+              <Mic className="h-5 w-5 text-pink-400" /> Голосовая идентичность
+            </h3>
+            {voiceId && (
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-zinc-800 rounded-lg p-3">
+                    <div className="text-xs text-zinc-500">Провайдер</div>
+                    <div className="text-sm font-medium">{voiceId.provider}</div>
+                  </div>
+                  <div className="bg-zinc-800 rounded-lg p-3">
+                    <div className="text-xs text-zinc-500">Voice ID</div>
+                    <div className="text-sm font-mono truncate">{voiceId.voice_id || "Не назначен"}</div>
+                  </div>
+                  <div className="bg-zinc-800 rounded-lg p-3">
+                    <div className="text-xs text-zinc-500">Стиль речи</div>
+                    <div className="text-sm">{voiceId.speaking_style || "natural"}</div>
+                  </div>
+                  <div className="bg-zinc-800 rounded-lg p-3">
+                    <div className="text-xs text-zinc-500">Язык</div>
+                    <div className="text-sm">{voiceId.language || "en"}</div>
+                  </div>
+                </div>
+                {voiceId.audio_tags && voiceId.audio_tags.length > 0 && (
+                  <div className="bg-zinc-800 rounded-lg p-4">
+                    <div className="text-xs text-zinc-400 mb-2">Аудио-теги</div>
+                    <div className="flex flex-wrap gap-1">
+                      {voiceId.audio_tags.map((tag) => (
+                        <span key={tag} className="text-xs bg-pink-500/20 text-pink-300 px-2 py-0.5 rounded">
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {voiceId.personality_traits && voiceId.personality_traits.length > 0 && (
+                  <div className="bg-zinc-800 rounded-lg p-4">
+                    <div className="text-xs text-zinc-400 mb-2">Черты личности</div>
+                    <div className="flex flex-wrap gap-1">
+                      {voiceId.personality_traits.map((trait) => (
+                        <span key={trait} className="text-xs bg-violet-500/20 text-violet-300 px-2 py-0.5 rounded">
+                          {trait}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <div className={`text-xs px-3 py-2 rounded ${voiceId.has_identity ? "bg-green-500/10 text-green-400" : "bg-yellow-500/10 text-yellow-400"}`}>
+                  {voiceId.has_identity ? "Голосовая идентичность установлена" : "Голос будет создан при первой генерации"}
                 </div>
               </div>
             )}
-            <div>
-              <textarea
-                value={memoryNotes}
-                onChange={(e) => setMemoryNotes(e.target.value)}
-                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
-                rows={2}
-                placeholder="Добавь информацию..."
-              />
-              <button
-                onClick={onUpdateMemory}
-                disabled={!memoryNotes}
-                className="mt-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 px-4 py-2 rounded-lg text-sm"
-              >
-                Обновить память
-              </button>
-            </div>
           </div>
-        )}
-      </div>
 
-      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
-        <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-          <Volume2 className="h-5 w-5 text-pink-400" /> Голосовые семплы ({voiceSamples.length})
-        </h3>
-        {voiceSamples.length === 0 ? (
-          <div className="text-center text-zinc-500 text-sm py-4">Нет семплов</div>
-        ) : (
-          <div className="space-y-2">
-            {voiceSamples.map((s) => (
-              <div key={s.id} className="bg-zinc-800 rounded-lg p-3">
-                <div className="text-sm truncate">{s.text}</div>
-                <div className="flex items-center justify-between mt-1">
-                  <span className="text-xs text-zinc-500">
-                    ${s.cost.toFixed(4)} &middot; {s.created_at?.slice(0, 10)}
-                  </span>
-                  {s.file_path && (
-                    <audio
-                      controls
-                      className="h-8"
-                      src={`${API_URL}/api/montage/files/${s.file_path.replace("/data/", "")}`}
-                    />
-                  )}
-                </div>
+          {/* Voice samples */}
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
+            <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+              <Volume2 className="h-5 w-5 text-pink-400" /> Голосовые семплы ({voiceSamples.length})
+            </h3>
+            {voiceSamples.length === 0 ? (
+              <div className="text-center text-zinc-500 text-sm py-4">Нет семплов</div>
+            ) : (
+              <div className="space-y-2">
+                {voiceSamples.map((s) => (
+                  <div key={s.id} className="bg-zinc-800 rounded-lg p-3">
+                    <div className="text-sm truncate">{s.text}</div>
+                    <div className="flex items-center justify-between mt-1">
+                      <span className="text-xs text-zinc-500">
+                        ${s.cost.toFixed(4)} &middot; {s.created_at?.slice(0, 10)}
+                      </span>
+                      {s.file_path && (
+                        <audio
+                          controls
+                          className="h-8"
+                          src={`${API_URL}/api/montage/files/${s.file_path.replace("/data/", "")}`}
+                        />
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
-      {memory?.voice_config && (
+      {/* ===== LEARNING SECTION ===== */}
+      {brainSection === "learning" && (
         <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
-          <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
-            <Settings2 className="h-5 w-5 text-yellow-400" /> Голосовые настройки
+          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+            <BarChart3 className="h-5 w-5 text-blue-400" /> Обучение и самоулучшение
           </h3>
-          <div className="grid grid-cols-2 gap-3">
-            {Object.entries(memory.voice_config).map(([k, v]) => (
-              <div key={k} className="bg-zinc-800 rounded p-2">
-                <div className="text-xs text-zinc-500">{k}</div>
-                <div className="text-sm">{typeof v === "object" ? JSON.stringify(v) : String(v)}</div>
+          {learning && (
+            <div className="space-y-4">
+              <div className="text-sm text-zinc-400">
+                Изучено промтов: <span className="text-white font-bold">{learning.total_learned_prompts}</span>
               </div>
-            ))}
-          </div>
+
+              {/* Content type performance */}
+              {Object.keys(learning.content_type_performance).length > 0 && (
+                <div>
+                  <div className="text-xs text-zinc-400 mb-2">Эффективность по типам контента</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    {Object.entries(learning.content_type_performance).map(([ct, data]) => (
+                      <div key={ct} className="bg-zinc-800 rounded-lg p-3">
+                        <div className="text-xs font-medium text-zinc-200">{ct}</div>
+                        <div className="flex justify-between mt-1">
+                          <span className="text-xs text-zinc-500">Генераций: {data.count}</span>
+                          <span className="text-xs text-emerald-400">Score: {data.total_score.toFixed(1)}</span>
+                        </div>
+                        {data.best_prompt && (
+                          <div className="text-[10px] text-zinc-500 mt-1 truncate" title={data.best_prompt}>
+                            Лучший: {data.best_prompt.slice(0, 60)}...
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Learning entries */}
+              {learning.learning_data.length > 0 && (
+                <div>
+                  <div className="text-xs text-zinc-400 mb-2">Последние записи обучения</div>
+                  <div className="space-y-2">
+                    {learning.learning_data.slice(0, 10).map((entry) => (
+                      <div key={entry.id} className="bg-zinc-800 rounded-lg p-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-zinc-300">{entry.content_type || entry.prompt_type}</span>
+                          <div className="flex gap-2 text-xs">
+                            <span className="text-emerald-400">Score: {entry.success_score.toFixed(1)}</span>
+                            {entry.user_rating && (
+                              <span className="text-amber-400">{entry.user_rating}/5</span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="text-[10px] text-zinc-500 mt-1 truncate">{entry.original_prompt}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {learning.total_learned_prompts === 0 && (
+                <div className="text-center text-zinc-500 text-sm py-4">
+                  Система начнёт учиться после первых генераций. Каждое фото, голос и видео записываются в память.
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

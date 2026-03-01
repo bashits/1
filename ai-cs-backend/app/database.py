@@ -297,6 +297,63 @@ async def init_db():
         updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    -- Profile photo gallery: stores ALL generated photos per girl (cloud URLs, no local files)
+    CREATE TABLE IF NOT EXISTS profile_gallery (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        profile_id INTEGER NOT NULL,
+        image_url TEXT NOT NULL,
+        thumbnail_url TEXT,
+        content_type TEXT NOT NULL DEFAULT 'portrait',
+        prompt TEXT,
+        model_key TEXT,
+        is_reference INTEGER NOT NULL DEFAULT 0,
+        is_approved INTEGER NOT NULL DEFAULT 0,
+        is_favorite INTEGER NOT NULL DEFAULT 0,
+        quality_rating INTEGER,
+        metadata TEXT NOT NULL DEFAULT '{}',
+        cost REAL NOT NULL DEFAULT 0.0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        FOREIGN KEY (profile_id) REFERENCES ai_profiles(id) ON DELETE CASCADE
+    );
+
+    -- Prompt learning: tracks which prompts produce best results per profile
+    CREATE TABLE IF NOT EXISTS prompt_learning (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        profile_id INTEGER NOT NULL,
+        prompt_type TEXT NOT NULL DEFAULT 'photo',
+        original_prompt TEXT NOT NULL,
+        refined_prompt TEXT,
+        model_key TEXT,
+        content_type TEXT,
+        success_score REAL NOT NULL DEFAULT 0.0,
+        user_rating INTEGER,
+        auto_features TEXT NOT NULL DEFAULT '{}',
+        generation_count INTEGER NOT NULL DEFAULT 1,
+        last_used_at TEXT NOT NULL DEFAULT (datetime('now')),
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        FOREIGN KEY (profile_id) REFERENCES ai_profiles(id) ON DELETE CASCADE
+    );
+
+    -- Voice identity: unique voice per girl with training data
+    CREATE TABLE IF NOT EXISTS voice_identity (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        profile_id INTEGER NOT NULL UNIQUE,
+        provider TEXT NOT NULL DEFAULT 'elevenlabs',
+        voice_id TEXT,
+        voice_name TEXT,
+        voice_settings TEXT NOT NULL DEFAULT '{}',
+        audio_tags TEXT NOT NULL DEFAULT '[]',
+        sample_urls TEXT NOT NULL DEFAULT '[]',
+        personality_traits TEXT NOT NULL DEFAULT '[]',
+        speaking_style TEXT NOT NULL DEFAULT 'natural',
+        language TEXT NOT NULL DEFAULT 'en',
+        total_generations INTEGER NOT NULL DEFAULT 0,
+        avg_quality_score REAL NOT NULL DEFAULT 0.0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        FOREIGN KEY (profile_id) REFERENCES ai_profiles(id) ON DELETE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS region_analysis (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         region TEXT NOT NULL,
