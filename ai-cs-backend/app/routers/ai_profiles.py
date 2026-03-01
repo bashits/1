@@ -705,8 +705,8 @@ async def generate_photo(
 
     if result.get("success"):
         images = result.get("images", [])
-        per_image_cost = float(result.get("cost_estimate", 0.0) or 0.0)
-        total_cost = round(per_image_cost * max(len(images), req.num_images), 4)
+        total_cost = round(float(result.get("cost_estimate", 0.0) or 0.0), 4)
+        per_image_cost = round(total_cost / max(len(images), req.num_images, 1), 4)
 
         gallery_ids = []
         for img in images:
