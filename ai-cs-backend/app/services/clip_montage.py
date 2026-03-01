@@ -1675,107 +1675,102 @@ async def generate_girl_lipsync_video(
     audio_path: str,
     girl_image_url: str,
     fal_api_key: str,
+    quality: str = "circle",
+    duration_seconds: float | None = None,
 ) -> dict:
     """Generate lip-sync video of AI girl using fal.ai.
-    
-    Requires fal.ai API key.
-    Cost: ~$0.02-0.04 per 3 second clip.
+
+    This is used by the montage engine.
+
+    Inputs:
+    - audio_path: local path to generated TTS audio
+    - girl_image_url: image URL for the girl's identity (from profile reference_images)
+
+    Notes:
+    - We rely on app.services.content_generation for the model call logic.
+    - For the montage overlay use-case we default to VEED Fabric 1.0 (cheapest I2V).
     """
     import httpx
 
     if not fal_api_key:
         return {"success": False, "error": "fal.ai API key required for lip-sync"}
 
-    # First upload audio to fal.ai storage
-    headers = {"Authorization": f"Key {fal_api_key}"}
+    if not girl_image_url:
+        return {"success": False, "error": "girl_image_url is required for lip-sync"}
 
-    audio_url = None
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    # content_generation reads FAL_KEY from env
+    os.environ["FAL_KEY"] = fal_api_key
+
+    try:
+        from app.services.content_generation import generate_lipsync_video, _upload_file_to_fal
+    except Exception as e:
+        return {"success": False, "error": f"Failed to import content generation service: {e}"}
+
+    if duration_seconds is None:
         try:
-            resp = await client.post(
-                "https://rest.alpha.fal.ai/storage/upload/initiate",
-                json={"content_type": "audio/mpeg", "file_name": os.path.basename(audio_path)},
-                headers=headers,
-            )
-            if resp.status_code == 200:
-                upload_data = resp.json()
-                upload_url = upload_data.get("upload_url", "")
-                file_url = upload_data.get("file_url", "")
-                if upload_url:
-                    with open(audio_path, "rb") as f:
-                        put_resp = await client.put(
-                            upload_url,
-                            content=f.read(),
-                            headers={"Content-Type": "audio/mpeg"},
-                        )
-                        if put_resp.status_code in (200, 201):
-                            audio_url = file_url
-        except Exception as e:
-            return {"success": False, "error": f"Audio upload failed: {e}"}
+            duration_seconds = await _get_audio_duration(audio_path)
+        except Exception:
+            duration_seconds = 3.0
 
+    audio_url = await _upload_file_to_fal(audio_path)
     if not audio_url:
         return {"success": False, "error": "Failed to upload audio to fal.ai"}
 
-    # Generate lip-sync video
-    async with httpx.AsyncClient(timeout=180.0) as client:
+    model_key = "veed_fabric"
+    if quality == "high":
+        model_key = "kling_avatar"
+    if quality == "maximum":
+        model_key = "omnihuman"
+
+    result = await generate_lipsync_video(
+        image_url=girl_image_url,
+        audio_url=audio_url,
+        model_key=model_key,
+        duration_seconds=float(duration_seconds or 3.0),
+    )
+
+    if not result.get("success"):
+        return result
+
+    video_info = result.get("video") or {}
+    video_url = video_info.get("url")
+
+    # Prefer local saved file; otherwise download into montage temp dir
+    source_path = video_info.get("file_path")
+    if source_path and os.path.exists(source_path):
+        fname = f"girl_lipsync_{uuid.uuid4().hex[:8]}.mp4"
+        dest = MONTAGE_DIR / "temp" / fname
         try:
-            resp = await client.post(
-                "https://queue.fal.run/veed/lipsync",
-                json={"video_url": girl_image_url, "audio_url": audio_url},
-                headers={**headers, "Content-Type": "application/json"},
-            )
-            if resp.status_code != 200:
-                return {"success": False, "error": f"fal.ai error: {resp.text[:300]}"}
+            shutil.copy(source_path, dest)
+            return {
+                "success": True,
+                "video_path": str(dest),
+                "video_url": video_url,
+                "cost": float(result.get("cost_estimate", 0.0) or 0.0),
+                "model": result.get("model_name"),
+            }
+        except Exception as e:
+            return {"success": False, "error": f"Failed to copy lipsync video: {e}", "video_url": video_url}
 
-            result = resp.json()
-
-            # Check if video is directly returned
-            if "video" in result:
-                video_url = result["video"].get("url", "")
-            else:
-                # Queue mode — poll
-                request_id = result.get("request_id", "")
-                if not request_id:
-                    return {"success": False, "error": "No request_id from fal.ai"}
-
-                for _ in range(90):
-                    await asyncio.sleep(2)
-                    status_resp = await client.get(
-                        f"https://queue.fal.run/veed/lipsync/requests/{request_id}/status",
-                        headers=headers,
-                    )
-                    if status_resp.status_code == 200:
-                        status = status_resp.json()
-                        if status.get("status") == "COMPLETED":
-                            result_resp = await client.get(
-                                f"https://queue.fal.run/veed/lipsync/requests/{request_id}",
-                                headers=headers,
-                            )
-                            if result_resp.status_code == 200:
-                                video_url = result_resp.json().get("video", {}).get("url", "")
-                                break
-                        elif status.get("status") == "FAILED":
-                            return {"success": False, "error": "Lip-sync generation failed"}
-                else:
-                    return {"success": False, "error": "Lip-sync generation timed out"}
-
-            # Download video
-            if video_url:
-                fname = f"girl_lipsync_{uuid.uuid4().hex[:8]}.mp4"
-                fpath = MONTAGE_DIR / "temp" / fname
+    if video_url:
+        fname = f"girl_lipsync_{uuid.uuid4().hex[:8]}.mp4"
+        dest = MONTAGE_DIR / "temp" / fname
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            try:
                 vid_resp = await client.get(video_url)
                 if vid_resp.status_code == 200:
-                    fpath.write_bytes(vid_resp.content)
+                    dest.write_bytes(vid_resp.content)
                     return {
                         "success": True,
-                        "video_path": str(fpath),
+                        "video_path": str(dest),
                         "video_url": video_url,
-                        "cost": 0.02,
+                        "cost": float(result.get("cost_estimate", 0.0) or 0.0),
+                        "model": result.get("model_name"),
                     }
+            except Exception as e:
+                return {"success": False, "error": str(e), "video_url": video_url}
 
-            return {"success": False, "error": "No video URL in response"}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+    return {"success": False, "error": "No video file_path or video url returned from fal.ai"}
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2025,6 +2020,7 @@ async def assemble_montage(
     girl_audio_path: str | None = None,
     girl_pip_position: str = "pip_bottom_right",
     girl_pip_size: float = 0.35,
+    girl_pip_shape: str = "circle",
     girl_start_time: float = 0.0,
     girl_duration: float = 3.0,
     game_audio_vol: float = 0.7,
@@ -2084,9 +2080,10 @@ async def assemble_montage(
 
     # AI girl PiP overlay
     if girl_video_idx is not None:
-        # Scale girl video for PiP
+        # Scale girl video for PiP (and optionally crop to a circle with alpha)
         gw = int(1080 * girl_pip_size)
         gh = int(1920 * girl_pip_size)
+        diameter = max(64, int(1080 * girl_pip_size))
 
         # Position mapping — 6 Instagram-style positions from template_engine
         enable_expr = f"enable='between(t,{girl_start_time},{girl_start_time + girl_duration})'"
@@ -2104,16 +2101,31 @@ async def assemble_montage(
 
         pos_filter = positions.get(girl_pip_position, positions["pip_bottom_right"])
 
-        if girl_pip_position == "fullscreen":
-            video_filters.append(f"[{girl_video_idx}:v]scale=1080:1920,setpts=PTS-STARTPTS[girl_v]")
+        # Extend (freeze) girl video if it's shorter than the montage
+        tpad = "tpad=stop_mode=clone:stop_duration=9999"
+
+        # Circle crop only makes sense for PiP modes (not full-width splits)
+        can_circle = girl_pip_position not in ("fullscreen", "split_bottom", "bottom_third")
+
+        if girl_pip_shape == "circle" and can_circle:
+            # Create alpha mask with geq() so the overlay is a perfect circle
+            video_filters.append(
+                f"[{girl_video_idx}:v]"
+                f"scale={diameter}:{diameter},setpts=PTS-STARTPTS,{tpad},format=rgba,"
+                "geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':"
+                "a='if(lte((X-W/2)*(X-W/2)+(Y-H/2)*(Y-H/2),(W/2)*(W/2)),255,0)'"
+                "[girl_v]"
+            )
+        elif girl_pip_position == "fullscreen":
+            video_filters.append(f"[{girl_video_idx}:v]scale=1080:1920,setpts=PTS-STARTPTS,{tpad}[girl_v]")
         elif girl_pip_position == "split_bottom":
             # 50/50 split: girl takes bottom half (1080x960)
-            video_filters.append(f"[{girl_video_idx}:v]scale=1080:960,setpts=PTS-STARTPTS[girl_v]")
+            video_filters.append(f"[{girl_video_idx}:v]scale=1080:960,setpts=PTS-STARTPTS,{tpad}[girl_v]")
         elif girl_pip_position == "bottom_third":
             # Bottom third: girl in lower 33% (1080x640)
-            video_filters.append(f"[{girl_video_idx}:v]scale=1080:640,setpts=PTS-STARTPTS[girl_v]")
+            video_filters.append(f"[{girl_video_idx}:v]scale=1080:640,setpts=PTS-STARTPTS,{tpad}[girl_v]")
         else:
-            video_filters.append(f"[{girl_video_idx}:v]scale={gw}:{gh},setpts=PTS-STARTPTS[girl_v]")
+            video_filters.append(f"[{girl_video_idx}:v]scale={gw}:{gh},setpts=PTS-STARTPTS,{tpad}[girl_v]")
 
         video_filters.append(f"[game_v][girl_v]{pos_filter}[out_v]")
     else:
@@ -2404,61 +2416,67 @@ async def create_montage(
     girl_dur = 3.0
 
     if enable_girl:
+        # Fail-safe: if girl is enabled, we require the full pipeline to succeed
+        if not fal_api_key:
+            return {"success": False, "error": "fal_api_key is required when enable_girl=true", "steps": steps}
+        if not girl_image_url:
+            return {"success": False, "error": "girl_image_url is required when enable_girl=true", "steps": steps}
+
         step4 = {"step": "girl_pipeline", "status": "running"}
         steps.append(step4)
 
-        # Get script for this moment type
+        # Use a longer script so she feels like she's reacting throughout the clip
         scripts = GIRL_SCRIPTS.get(moment_type, GIRL_SCRIPTS["default"])
+        girl_text = " ".join(
+            [
+                scripts.get("intro", ""),
+                scripts.get("react", ""),
+                scripts.get("outro", ""),
+            ]
+        ).strip()
 
-        # Find react phase timing
-        for phase in template["phases"]:
-            if phase.get("girl_visible") and phase.get("girl_speaks"):
-                girl_start = phase["start"] * (actual_duration / template["total_duration"])
-                girl_dur = (phase["end"] - phase["start"]) * (actual_duration / template["total_duration"])
-                script_key = phase.get("girl_script", "react")
-                break
-        else:
-            # Default: use react script at 70% through clip
-            girl_start = actual_duration * 0.65
-            girl_dur = 3.0
-            script_key = "react"
-
-        girl_text = scripts.get(script_key, scripts["react"])
+        # Show her for the full montage (circle webcam style)
+        girl_start = 0.0
+        girl_dur = actual_duration
 
         # Generate TTS (ElevenLabs v3 if key available, edge-tts fallback)
         tts_result = await generate_girl_audio(
-            girl_text, girl_voice, f"girl_tts_{session_id}",
+            girl_text,
+            girl_voice,
+            f"girl_tts_{session_id}",
             elevenlabs_api_key=elevenlabs_api_key,
         )
-        if tts_result["success"]:
-            girl_audio_path = tts_result["audio_path"]
-            girl_dur = min(girl_dur, tts_result["duration"])
-            total_cost += tts_result.get("cost", 0)
-
-            # Generate lip-sync video if we have image + API key
-            if girl_image_url and fal_api_key:
-                lipsync_result = await generate_girl_lipsync_video(
-                    girl_audio_path, girl_image_url, fal_api_key,
-                )
-                if lipsync_result["success"]:
-                    girl_video_path = lipsync_result["video_path"]
-                    total_cost += lipsync_result.get("cost", 0)
-                    step4["lipsync"] = "success"
-                else:
-                    step4["lipsync"] = f"failed: {lipsync_result.get('error', '')}"
-            else:
-                step4["lipsync"] = "skipped (no image_url or fal_api_key)"
-
-            step4["tts"] = "success"
-        else:
+        if not tts_result.get("success"):
+            step4["status"] = "failed"
             step4["tts"] = f"failed: {tts_result.get('error', '')}"
+            return {"success": False, "error": "Girl TTS generation failed", "steps": steps}
 
-        step4["status"] = "success" if girl_audio_path else "partial"
+        girl_audio_path = tts_result["audio_path"]
+        total_cost += tts_result.get("cost", 0)
+        step4["tts"] = "success"
+
+        lipsync_result = await generate_girl_lipsync_video(
+            girl_audio_path,
+            girl_image_url,
+            fal_api_key,
+            quality="circle",
+            duration_seconds=float(tts_result.get("duration") or 3.0),
+        )
+        if not lipsync_result.get("success"):
+            step4["status"] = "failed"
+            step4["lipsync"] = f"failed: {lipsync_result.get('error', '')}"
+            return {"success": False, "error": "Girl lip-sync generation failed", "steps": steps, "total_cost": total_cost}
+
+        girl_video_path = lipsync_result["video_path"]
+        total_cost += lipsync_result.get("cost", 0)
+        step4["lipsync"] = "success"
+        step4["status"] = "success"
         step4["result"] = {
-            "has_audio": girl_audio_path is not None,
-            "has_video": girl_video_path is not None,
+            "has_audio": True,
+            "has_video": True,
             "text": girl_text,
             "voice": girl_voice,
+            "model": lipsync_result.get("model"),
         }
 
     # ── STEP 5: Final Assembly ──
@@ -2493,6 +2511,7 @@ async def create_montage(
         girl_audio_path=girl_audio_path,
         girl_pip_position=girl_pip_pos,
         girl_pip_size=girl_pip_sz,
+        girl_pip_shape="circle",
         girl_start_time=girl_start,
         girl_duration=girl_dur,
         output_name=f"final_{session_id}",

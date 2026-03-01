@@ -175,7 +175,7 @@ async def create_montage_endpoint(
 ):
     """
     Create a full montage clip.
-    
+
     This is the main endpoint — runs the complete pipeline:
     1. Download source clip from URL
     2. Process game clip (vertical 9:16, color grade, text overlays)
@@ -183,9 +183,56 @@ async def create_montage_endpoint(
     4. (Optional) Generate AI girl voice + lip-sync video
     5. Assemble everything into final clip with multi-track audio
     6. (Optional) Auto-save to girl's content if girl_profile_id provided
-    
-    Returns: file paths, duration, resolution, cost, and step-by-step results.
+
+    When enable_girl=true and girl_profile_id is provided but girl_image_url is
+    not, the endpoint automatically resolves the image from the profile's
+    reference_images or profile_gallery (preferring approved/reference photos).
     """
+    girl_image_url = req.girl_image_url
+
+    # ── Auto-resolve girl_image_url from profile if not explicitly provided ──
+    if req.enable_girl and not girl_image_url and req.girl_profile_id:
+        try:
+            # 1) Try profile_gallery: approved reference photos first
+            cursor = await db.execute(
+                "SELECT image_url FROM profile_gallery "
+                "WHERE profile_id = ? AND is_reference = 1 AND is_approved = 1 "
+                "ORDER BY quality_rating DESC, created_at DESC LIMIT 1",
+                (req.girl_profile_id,),
+            )
+            row = await cursor.fetchone()
+            if row:
+                girl_image_url = row[0]
+            else:
+                # 2) Any approved gallery photo
+                cursor = await db.execute(
+                    "SELECT image_url FROM profile_gallery "
+                    "WHERE profile_id = ? AND is_approved = 1 "
+                    "ORDER BY quality_rating DESC, created_at DESC LIMIT 1",
+                    (req.girl_profile_id,),
+                )
+                row = await cursor.fetchone()
+                if row:
+                    girl_image_url = row[0]
+                else:
+                    # 3) Fallback: reference_images JSON array on ai_profiles
+                    cursor = await db.execute(
+                        "SELECT reference_images FROM ai_profiles WHERE id = ?",
+                        (req.girl_profile_id,),
+                    )
+                    row = await cursor.fetchone()
+                    if row:
+                        imgs = json.loads(row[0] or "[]")
+                        if imgs:
+                            girl_image_url = imgs[0] if isinstance(imgs[0], str) else imgs[0].get("url")
+        except Exception as e:
+            # Non-fatal — will be caught by the fail-safe in create_montage
+            pass
+
+    # ── Read API keys from env when not provided in request ──
+    fal_api_key = req.fal_api_key or os.environ.get("FAL_KEY")
+    elevenlabs_api_key = req.elevenlabs_api_key or os.environ.get("ELEVENLABS_API_KEY")
+
     result = await create_montage(
         clip_url=req.clip_url,
         template_id=req.template_id,
@@ -198,9 +245,9 @@ async def create_montage_endpoint(
         action_timestamp=req.action_timestamp,
         enable_girl=req.enable_girl,
         girl_voice=req.girl_voice,
-        girl_image_url=req.girl_image_url,
-        fal_api_key=req.fal_api_key,
-        elevenlabs_api_key=req.elevenlabs_api_key,
+        girl_image_url=girl_image_url,
+        fal_api_key=fal_api_key,
+        elevenlabs_api_key=elevenlabs_api_key,
         color_grade=req.color_grade,
         music_track=req.music_track,
     )

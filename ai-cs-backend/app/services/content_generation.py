@@ -95,25 +95,44 @@ LIPSYNC_MODELS = {
         "name": "OmniHuman 1.5 (ByteDance)",
         "quality": 10,
         "cost_per_second": 0.16,  # $0.16/sec — official fal.ai pricing
+        "input_type": "image",  # image + audio → video
         "best_for": ["film_grade", "full_body", "expressions"],
     },
     "kling_avatar": {
-        "id": "fal-ai/kling-video/lipsync/audio-to-video",
-        "name": "Kling LipSync Audio-to-Video",
+        "id": "fal-ai/kling-video/ai-avatar/v2/pro",
+        "name": "Kling AI Avatar v2 Pro",
         "quality": 9,
-        # Kling LipSync: $0.014/sec, rounds UP to nearest 5s increment
-        # e.g. 3s video billed as 5s = $0.07, 7s billed as 10s = $0.14
+        # Kling AI Avatar v2 Pro: $0.115/sec (image + audio → talking video)
+        "cost_per_second": 0.115,
+        "input_type": "image",  # image + audio → video
+        "best_for": ["talking_head", "realistic", "natural"],
+    },
+    "kling_lipsync_v2v": {
+        "id": "fal-ai/kling-video/lipsync/audio-to-video",
+        "name": "Kling LipSync (Video-to-Video)",
+        "quality": 9,
+        # Kling LipSync V2V: $0.014/sec, rounds UP to nearest 5s increment
         "cost_per_second": 0.014,
-        "billing_increment": 5,  # rounds up to nearest 5s
-        "best_for": ["talking_head", "fast", "natural"],
+        "billing_increment": 5,
+        "input_type": "video",  # video + audio → lip-synced video
+        "best_for": ["v2v_lipsync", "fast", "cheap"],
+    },
+    "veed_fabric": {
+        "id": "veed/fabric-1.0",
+        "name": "VEED Fabric 1.0 (Cheapest Image→Video)",
+        "quality": 7,
+        "cost_per_second": 0.08,  # $0.08/sec at 480p
+        "input_type": "image",  # image + audio → talking video
+        "best_for": ["budget", "circle_overlay", "social_media"],
     },
     "latentsync": {
         "id": "fal-ai/latentsync",
-        "name": "LatentSync (Budget)",
+        "name": "LatentSync (Budget V2V)",
         "quality": 6,
         # LatentSync: $0.20 flat for videos ≤40s, $0.005/sec for longer
         "cost_flat_under_40s": 0.20,
         "cost_per_second_over_40s": 0.005,
+        "input_type": "video",  # video + audio → lip-synced video
         "best_for": ["budget", "quick", "testing"],
     },
 }
@@ -149,8 +168,8 @@ def _calc_lipsync_cost(model_key: str, duration_seconds: float) -> float:
     """Calculate lipsync cost based on actual fal.ai billing rules."""
     ls_model = LIPSYNC_MODELS.get(model_key, LIPSYNC_MODELS["omnihuman"])
 
-    if model_key == "kling_avatar":
-        # Kling LipSync: $0.014/sec, rounds UP to nearest 5s
+    if model_key == "kling_lipsync_v2v":
+        # Kling LipSync V2V: $0.014/sec, rounds UP to nearest 5s
         increment = ls_model.get("billing_increment", 5)
         billed_seconds = math.ceil(duration_seconds / increment) * increment
         return round(ls_model["cost_per_second"] * billed_seconds, 4)
@@ -161,7 +180,7 @@ def _calc_lipsync_cost(model_key: str, duration_seconds: float) -> float:
             return ls_model.get("cost_flat_under_40s", 0.20)
         return round(0.20 + ls_model.get("cost_per_second_over_40s", 0.005) * (duration_seconds - 40), 4)
 
-    # OmniHuman and others: simple per-second
+    # All other models (omnihuman, kling_avatar, veed_fabric): simple per-second
     cost_per_sec = ls_model.get("cost_per_second", 0.0)
     return round(cost_per_sec * duration_seconds, 4)
 
@@ -614,12 +633,20 @@ def select_image_model(
 
 
 def select_lipsync_model(quality: str = "maximum") -> dict:
-    """Select the best lipsync model."""
+    """Select the best lipsync model.
+
+    Quality tiers:
+    - maximum: OmniHuman 1.5 (film-grade, expensive)
+    - high: Kling AI Avatar v2 Pro (high quality)
+    - budget/circle: VEED Fabric 1.0 (cheapest image→video, great for small circle overlay)
+    """
     if quality == "maximum":
         return LIPSYNC_MODELS["omnihuman"]
     if quality == "high":
         return LIPSYNC_MODELS["kling_avatar"]
-    return LIPSYNC_MODELS["latentsync"]
+    if quality in ("budget", "circle"):
+        return LIPSYNC_MODELS["veed_fabric"]
+    return LIPSYNC_MODELS["veed_fabric"]  # sensible default for montage overlay
 
 
 async def generate_photo(
@@ -792,19 +819,21 @@ async def generate_lipsync_video(
     model_id = model_info["id"]
 
     input_data: dict = {}
-    if model_key == "omnihuman":
+    input_type = model_info.get("input_type", "image")
+
+    if input_type == "image":
+        # Models that accept image + audio (omnihuman, kling_avatar, veed_fabric)
         input_data = {
             "image_url": image_url,
             "audio_url": audio_url,
         }
-    elif model_key == "kling_avatar":
+        # Kling Avatar v2 Pro requires a prompt field
+        if model_key == "kling_avatar":
+            input_data["prompt"] = "."
+    else:
+        # Models that accept video + audio (kling_lipsync_v2v, latentsync)
         input_data = {
-            "image_url": image_url,
-            "audio_url": audio_url,
-        }
-    else:  # veed
-        input_data = {
-            "video_url": image_url,
+            "video_url": image_url,  # caller must pass a video URL for v2v models
             "audio_url": audio_url,
         }
 
