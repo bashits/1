@@ -133,7 +133,7 @@ class GeneratePhotoRequest(BaseModel):
     use_reference_images: bool = True
     set_as_reference: bool = False
     use_lora: bool = True  # Auto-use LoRA if trained
-    lora_scale: float = 1.0
+    lora_scale: float = 0.95
     custom_scene: Optional[str] = None
 
 
@@ -872,12 +872,12 @@ async def generate_video(
         photo_result = await generate_photo_with_lora(
             prompt=photo_prompt,
             lora_url=lora_url,
-            lora_scale=1.0,
+            lora_scale=LORA_INFERENCE_CONFIG["default_lora_scale"],
             width=1024,
             height=1024,
             num_images=1,
-            guidance_scale=3.5,
-            num_inference_steps=28,
+            guidance_scale=LORA_INFERENCE_CONFIG["default_guidance_scale"],
+            num_inference_steps=LORA_INFERENCE_CONFIG["default_num_inference_steps"],
         )
     else:
         # Fallback: reference images or standard (shouldn't happen if LoRA is trained)

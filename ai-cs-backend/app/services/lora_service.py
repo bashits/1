@@ -416,7 +416,7 @@ async def wait_for_training(request_id: str, timeout_seconds: int = 900) -> dict
 async def generate_photo_with_lora(
     prompt: str,
     lora_url: str,
-    lora_scale: float = 1.0,
+    lora_scale: float = 0.95,
     negative_prompt: str = "",
     width: int = 1024,
     height: int = 1024,

@@ -281,13 +281,12 @@ def get_all_pricing() -> dict:
                 "note": "$0.16/sec of output video",
             },
             "kling_avatar": {
-                "name": "Kling LipSync Audio-to-Video",
-                "pricing_type": "per_second_rounded",
-                "cost_per_second": 0.014,
-                "billing_increment": 5,
+                "name": "Kling AI Avatar v2 Pro",
+                "pricing_type": "per_second",
+                "cost_per_second": 0.115,
                 "quality": 9,
-                "best_for": ["talking_head", "fast", "natural"],
-                "note": "$0.014/sec, billed in 5s increments (3s→$0.07)",
+                "best_for": ["talking_head", "realistic", "natural"],
+                "note": "$0.115/sec of output video",
             },
             "latentsync": {
                 "name": "LatentSync (Budget)",
