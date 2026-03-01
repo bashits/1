@@ -1014,6 +1014,70 @@ async def generate_video(
 
 # ─── Content Gallery ──────────────────────────────────────────────────
 
+class SaveContentRequest(BaseModel):
+    content_type: str = "reel"
+    title: Optional[str] = None
+    prompt: Optional[str] = None
+    file_path: Optional[str] = None
+    file_url: Optional[str] = None
+    thumbnail_path: Optional[str] = None
+    duration: Optional[float] = None
+    cost: float = 0.0
+    status: str = "completed"
+    metadata: Optional[dict] = None
+
+
+@router.post("/{profile_id}/content")
+async def save_content(
+    profile_id: int,
+    req: SaveContentRequest,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Save content (reel, photo, video, voice) to a girl's profile."""
+    cursor = await db.execute("SELECT id FROM ai_profiles WHERE id = ?", (profile_id,))
+    if not await cursor.fetchone():
+        raise HTTPException(404, "Profile not found")
+
+    metadata_str = json.dumps(req.metadata or {})
+    cursor = await db.execute(
+        """INSERT INTO content_items
+           (profile_id, content_type, title, prompt, file_path, file_url,
+            thumbnail_path, duration, cost, status, metadata)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (profile_id, req.content_type, req.title, req.prompt,
+         req.file_path, req.file_url, req.thumbnail_path,
+         req.duration, req.cost, req.status, metadata_str),
+    )
+    content_id = cursor.lastrowid
+
+    # Update profile counters
+    if req.content_type in ("reel", "video", "lipsync"):
+        await db.execute(
+            "UPDATE ai_profiles SET total_videos = total_videos + 1, total_cost = total_cost + ?, updated_at = datetime('now') WHERE id = ?",
+            (req.cost, profile_id),
+        )
+    elif req.content_type == "photo":
+        await db.execute(
+            "UPDATE ai_profiles SET total_photos = total_photos + 1, total_cost = total_cost + ?, updated_at = datetime('now') WHERE id = ?",
+            (req.cost, profile_id),
+        )
+    else:
+        await db.execute(
+            "UPDATE ai_profiles SET total_cost = total_cost + ?, updated_at = datetime('now') WHERE id = ?",
+            (req.cost, profile_id),
+        )
+    await db.commit()
+
+    return {
+        "success": True,
+        "content_id": content_id,
+        "profile_id": profile_id,
+        "content_type": req.content_type,
+        "title": req.title,
+        "file_url": req.file_url,
+    }
+
+
 @router.get("/{profile_id}/content")
 async def get_content(
     profile_id: int,

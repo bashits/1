@@ -9,11 +9,15 @@ Endpoints for the full montage pipeline:
 - Serve files
 """
 
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional
+import json
 import os
+import aiosqlite
+
+from app.database import get_db
 
 from app.services.clip_montage import (
     create_montage,
@@ -49,6 +53,7 @@ class CreateMontageRequest(BaseModel):
     enable_girl: bool = False
     girl_voice: str = "jessica"
     girl_image_url: Optional[str] = None
+    girl_profile_id: Optional[int] = None  # Auto-save reel to girl's content
     fal_api_key: Optional[str] = None
     elevenlabs_api_key: Optional[str] = None
     color_grade: str = "cinematic"
@@ -164,7 +169,10 @@ async def girl_config():
 
 
 @router.post("/create")
-async def create_montage_endpoint(req: CreateMontageRequest):
+async def create_montage_endpoint(
+    req: CreateMontageRequest,
+    db: aiosqlite.Connection = Depends(get_db),
+):
     """
     Create a full montage clip.
     
@@ -174,6 +182,7 @@ async def create_montage_endpoint(req: CreateMontageRequest):
     3. Generate SFX and background music
     4. (Optional) Generate AI girl voice + lip-sync video
     5. Assemble everything into final clip with multi-track audio
+    6. (Optional) Auto-save to girl's content if girl_profile_id provided
     
     Returns: file paths, duration, resolution, cost, and step-by-step results.
     """
@@ -195,6 +204,54 @@ async def create_montage_endpoint(req: CreateMontageRequest):
         color_grade=req.color_grade,
         music_track=req.music_track,
     )
+
+    # Auto-save to girl's content_items if profile_id provided and montage succeeded
+    if req.girl_profile_id and result.get("success"):
+        try:
+            file_path = result.get("output", {}).get("file_path") or result.get("file_path")
+            serve_url = result.get("output", {}).get("serve_url") or result.get("serve_url")
+            duration = result.get("output", {}).get("duration") or result.get("duration", 0)
+            total_cost = result.get("total_cost", 0.0)
+
+            metadata = json.dumps({
+                "moment_type": req.moment_type,
+                "template_id": req.template_id,
+                "voice": req.girl_voice,
+                "voice_engine": "elevenlabs_v3",
+                "girl_overlay": True,
+                "color_grade": req.color_grade,
+                "hook_text": req.hook_text,
+                "auto_saved": True,
+            })
+
+            cursor = await db.execute(
+                """INSERT INTO content_items
+                   (profile_id, content_type, title, prompt, file_path, file_url, duration, cost, status, metadata)
+                   VALUES (?, 'reel', ?, ?, ?, ?, ?, ?, 'completed', ?)""",
+                (
+                    req.girl_profile_id,
+                    f"CS2 {req.moment_type} Reel",
+                    req.hook_text,
+                    file_path,
+                    serve_url,
+                    duration,
+                    total_cost,
+                    metadata,
+                ),
+            )
+            content_id = cursor.lastrowid
+            await db.execute(
+                "UPDATE ai_profiles SET total_videos = total_videos + 1, total_cost = total_cost + ?, updated_at = datetime('now') WHERE id = ?",
+                (total_cost, req.girl_profile_id),
+            )
+            await db.commit()
+            result["saved_to_profile"] = {
+                "profile_id": req.girl_profile_id,
+                "content_id": content_id,
+            }
+        except Exception as e:
+            result["save_error"] = str(e)
+
     return result
 
 
