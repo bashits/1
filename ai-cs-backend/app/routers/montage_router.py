@@ -510,14 +510,15 @@ async def upload_clip(file: UploadFile = File(...)):
     """Upload a pre-generated montage clip to the server."""
     output_dir = MONTAGE_DIR / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
-    dest = output_dir / file.filename
+    safe_filename = os.path.basename(file.filename) if file.filename else f"upload_{__import__('uuid').uuid4().hex[:8]}.mp4"
+    dest = output_dir / safe_filename
     content = await file.read()
     with open(dest, "wb") as f:
         f.write(content)
     return {
         "success": True,
-        "filename": file.filename,
+        "filename": safe_filename,
         "file_path": str(dest),
         "file_size": len(content),
-        "serve_url": f"/api/montage/files/output/{file.filename}",
+        "serve_url": f"/api/montage/files/output/{safe_filename}",
     }
