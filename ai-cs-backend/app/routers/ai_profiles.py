@@ -49,6 +49,7 @@ from app.services.lora_service import (
     LORA_TRAINING_CONFIG,
     LORA_INFERENCE_CONFIG,
 )
+from app.services.real_photo_sourcer import source_photos_with_fallback
 
 router = APIRouter(prefix="/api/ai-profiles", tags=["ai-profiles"])
 
@@ -139,6 +140,7 @@ class TrainLoraRequest(BaseModel):
     num_photos: int = 15  # Training dataset size (10-20 optimal)
     steps: int = 1000  # Training steps
     trigger_word: Optional[str] = None  # Auto-generated if not provided
+    use_real_photos: bool = True  # Use real model photos from Pexels (recommended)
 
 
 class GenerateVideoRequest(BaseModel):
@@ -340,50 +342,11 @@ async def create_profile(
     await db.commit()
     profile_id = cursor.lastrowid
 
-    # ═══ AUTO-GENERATE FIRST IDENTITY PHOTO ═══
+    # ═══ SKIP INITIAL PHOTO — REQUIRE LoRA TRAINING FIRST ═══
+    # We don't generate AI photos on creation anymore.
+    # The user must first train LoRA (using real model photos from Pexels),
+    # then ALL photos will be generated through LoRA for maximum realism.
     first_photo_url = None
-    if data.auto_generate_photo:
-        try:
-            from app.services.content_generation import generate_photo as fal_generate_photo
-
-            # Build identity prompt from unique appearance
-            photo_prompt = generate_image_prompt(
-                {"appearance": appearance, "personality": personality},
-                content_type="professional_portrait",
-            )
-            photo_result = await fal_generate_photo(
-                prompt=photo_prompt,
-                width=1024,
-                height=1024,
-                num_images=1,
-                model_key="flux2_realism",
-            )
-            if photo_result.get("success"):
-                images = photo_result.get("images", [])
-                if images:
-                    first_photo_url = images[0].get("url", "")
-                    if first_photo_url:
-                        # Save as reference image
-                        await db.execute(
-                            "UPDATE ai_profiles SET reference_images = ? WHERE id = ?",
-                            (json.dumps([first_photo_url]), profile_id),
-                        )
-                        # Save to gallery as reference
-                        await db.execute(
-                            """INSERT INTO profile_gallery (profile_id, image_url, content_type, prompt, model_key, is_reference, cost)
-                               VALUES (?, ?, 'identity_portrait', ?, 'flux2_realism', 1, ?)""",
-                            (profile_id, first_photo_url, photo_prompt, photo_result.get("cost_estimate", 0.025)),
-                        )
-                        # Update photo count
-                        await db.execute(
-                            "UPDATE ai_profiles SET total_photos = 1, total_cost = ? WHERE id = ?",
-                            (photo_result.get("cost_estimate", 0.025), profile_id),
-                        )
-                        await db.commit()
-        except Exception as e:
-            # Photo generation is best-effort; don't fail profile creation
-            import logging
-            logging.warning(f"Auto-photo generation failed for profile {profile_id}: {e}")
 
     # ═══ AUTO-CREATE VOICE IDENTITY ═══
     try:
@@ -600,10 +563,10 @@ async def generate_photo(
 ):
     """Generate photo(s) for this girl.
 
-    Priority:
-    1. If LoRA is trained and use_lora=true → use fal-ai/flux-lora (100% face consistency)
-    2. If reference_images available → use FLUX 2 Pro multi-reference
-    3. Otherwise → use FLUX Realism
+    LoRA-first approach:
+    - If LoRA is trained → use fal-ai/flux-lora (100% face consistency from real photos)
+    - If LoRA is NOT trained → block generation and require training first
+    - This ensures every generated photo looks like a real person, not AI art
     """
     cursor = await db.execute("SELECT * FROM ai_profiles WHERE id = ?", (profile_id,))
     row = await cursor.fetchone()
@@ -625,10 +588,26 @@ async def generate_photo(
     trigger_word = profile.get("lora_trigger_word")
     lora_status = profile.get("lora_training_status", "not_trained")
 
+    # ═══ BLOCK GENERATION WITHOUT LoRA ═══
+    # LoRA must be trained first (on real model photos) for realistic results
+    if lora_status != "trained":
+        status_messages = {
+            "not_trained": "Сначала обучите LoRA! Нажмите 'Обучить LoRA' в табе Обзор. Это обучит модель на реальных фото модели для максимального реализма.",
+            "generating_dataset": "LoRA: идёт поиск реальных фото модели... Подождите 1-2 минуты.",
+            "sourcing_photos": "LoRA: идёт поиск реальных фото модели в открытом доступе... Подождите.",
+            "training": "LoRA обучается... Подождите 5-15 минут. После этого генерация будет доступна.",
+            "failed": "LoRA обучение не удалось. Попробуйте обучить заново.",
+        }
+        msg = status_messages.get(lora_status, f"LoRA статус: {lora_status}. Сначала обучите LoRA.")
+        raise HTTPException(
+            status_code=400,
+            detail=msg,
+        )
+
     used_reference_images = False
     used_lora = False
 
-    # Priority 1: LoRA-based generation (best face consistency)
+    # LoRA-based generation (face identity from real model photos)
     if req.use_lora and lora_url and trigger_word and lora_status == "trained":
         appearance = profile.get("appearance", {})
         if req.prompt:
@@ -1477,13 +1456,15 @@ async def train_lora(
 ):
     """Train a LoRA model for this girl's face identity.
 
-    Flow:
-    1. Generate 10-20 diverse base photos using FLUX Realism
-    2. Pack into zip with captions
-    3. Upload to fal.ai and start training (~$2, 5-15 min)
-    4. Store LoRA URL when complete
+    Flow (Real Photo approach):
+    1. Search Pexels for 10-20 real photos of a model matching appearance
+    2. If Pexels unavailable, fall back to AI-generated hyper-realistic photos
+    3. Pack photos into zip with captions
+    4. Upload to fal.ai and start training (~$2, 5-15 min)
+    5. Store LoRA URL when complete
 
-    After training, all photo generation auto-uses LoRA for 100% face consistency.
+    After training, all photo generation uses LoRA trained on REAL photos
+    for maximum realism. No AI-generated photos until LoRA is trained.
     """
     cursor = await db.execute("SELECT * FROM ai_profiles WHERE id = ?", (profile_id,))
     row = await cursor.fetchone()
@@ -1507,18 +1488,43 @@ async def train_lora(
         name_slug = profile.get("name", "girl").lower().replace(" ", "_")[:10]
         trigger_word = f"{name_slug}_{profile_id}G"
 
-    # Step 1: Generate training dataset
+    # Step 1: Source real model photos (Pexels) or AI fallback
     await db.execute(
-        "UPDATE ai_profiles SET lora_training_status = 'generating_dataset', lora_trigger_word = ?, updated_at = datetime('now') WHERE id = ?",
+        "UPDATE ai_profiles SET lora_training_status = 'sourcing_photos', lora_trigger_word = ?, updated_at = datetime('now') WHERE id = ?",
         (trigger_word, profile_id),
     )
     await db.commit()
 
-    photos = await generate_training_dataset(
-        appearance=appearance,
-        trigger_word=trigger_word,
-        num_photos=req.num_photos,
-    )
+    if req.use_real_photos:
+        # Try real photos from Pexels first, fall back to AI
+        source_result = await source_photos_with_fallback(
+            appearance=appearance,
+            trigger_word=trigger_word,
+            target_count=req.num_photos,
+        )
+        if source_result.get("success"):
+            photos = source_result["photos"]
+            photo_source = source_result.get("source", "unknown")
+            photographer = source_result.get("photographer", "")
+        else:
+            await db.execute(
+                "UPDATE ai_profiles SET lora_training_status = 'failed', updated_at = datetime('now') WHERE id = ?",
+                (profile_id,),
+            )
+            await db.commit()
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to source photos: {source_result.get('error', 'Unknown error')}",
+            )
+    else:
+        # Legacy: AI-generated training photos only
+        photos = await generate_training_dataset(
+            appearance=appearance,
+            trigger_word=trigger_word,
+            num_photos=req.num_photos,
+        )
+        photo_source = "ai_generated"
+        photographer = "AI (FLUX Realism)"
 
     if len(photos) < 5:
         await db.execute(
@@ -1535,12 +1541,18 @@ async def train_lora(
     for photo in photos:
         await db.execute(
             """INSERT INTO profile_gallery (profile_id, image_url, content_type, prompt, model_key, is_reference, metadata)
-               VALUES (?, ?, 'lora_training', ?, 'flux2_realism', 1, ?)""",
+               VALUES (?, ?, 'lora_training', ?, ?, 1, ?)""",
             (
                 profile_id,
                 photo["url"],
                 photo.get("caption", ""),
-                json.dumps({"type": photo["type"], "purpose": "lora_training"}),
+                "pexels_real" if photo_source == "pexels" else "flux2_realism",
+                json.dumps({
+                    "type": photo.get("type", "real_photo"),
+                    "purpose": "lora_training",
+                    "source": photo_source,
+                    "photographer": photo.get("photographer", photographer),
+                }),
             ),
         )
 
@@ -1598,10 +1610,15 @@ async def train_lora(
         "trigger_word": trigger_word,
         "request_id": request_id,
         "training_photos": len(photos),
+        "photo_source": photo_source,
+        "photographer": photographer,
         "steps": req.steps,
         "estimated_cost": LORA_TRAINING_CONFIG["cost_per_training"],
         "status": "training",
-        "message": f"LoRA training started. {len(photos)} photos uploaded. Training will take 5-15 minutes.",
+        "message": (
+            f"LoRA training started with {len(photos)} {'real model' if photo_source == 'pexels' else 'AI-generated'} photos. "
+            f"Training will take 5-15 minutes."
+        ),
     }
 
 

@@ -778,6 +778,7 @@ function OverviewTab({
   const lStatus = loraStatus?.lora_status || selected.lora_training_status || "not_trained";
   const statusColors: Record<string, string> = {
     not_trained: "bg-zinc-700 text-zinc-300",
+    sourcing_photos: "bg-amber-500/20 text-amber-400",
     generating_dataset: "bg-yellow-500/20 text-yellow-400",
     training: "bg-blue-500/20 text-blue-400",
     trained: "bg-green-500/20 text-green-400",
@@ -785,6 +786,7 @@ function OverviewTab({
   };
   const statusLabels: Record<string, string> = {
     not_trained: "Не обучена",
+    sourcing_photos: "Поиск реальных фото модели...",
     generating_dataset: "Генерация датасета...",
     training: "Обучение LoRA...",
     trained: "LoRA обучена",
@@ -851,8 +853,11 @@ function OverviewTab({
         {lStatus === "not_trained" || lStatus === "failed" ? (
           <div className="space-y-3">
             <p className="text-sm text-zinc-400">
-              LoRA обучает модель на 15 фото девушки, после чего все генерации будут с одним и тем же лицом.
-              Стоимость: ~$2 за обучение, ~$0.05 за фото после.
+              LoRA находит 10-20 реальных фото модели из открытого доступа (Pexels) и обучает модель.
+              Результат: живая девушка с фиксированным лицом. ~$2 за обучение, ~$0.05 за фото.
+            </p>
+            <p className="text-xs text-amber-400">
+              Важно: генерация фото доступна только после обучения LoRA.
             </p>
             <button
               onClick={onTrainLora}
@@ -860,23 +865,24 @@ function OverviewTab({
               className="flex items-center gap-2 bg-pink-600 hover:bg-pink-700 disabled:opacity-50 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
             >
               {loraTraining ? (
-                <><Loader2 className="h-4 w-4 animate-spin" /> Генерация датасета...</>
+                <><Loader2 className="h-4 w-4 animate-spin" /> Поиск фото модели...</>
               ) : (
-                <><Sparkles className="h-4 w-4" /> Обучить LoRA (~$2, 5-15 мин)</>
+                <><Sparkles className="h-4 w-4" /> Обучить LoRA на реальных фото (~$2, 5-15 мин)</>
               )}
             </button>
             {lStatus === "failed" && loraResult?.error && (
               <p className="text-xs text-red-400">Ошибка: {loraResult.error}</p>
             )}
           </div>
-        ) : lStatus === "training" || lStatus === "generating_dataset" || lStatus === "queued" ? (
+        ) : lStatus === "training" || lStatus === "generating_dataset" || lStatus === "sourcing_photos" || lStatus === "queued" ? (
           <div className="space-y-2">
             <div className="flex items-center gap-2">
               <Loader2 className="h-4 w-4 animate-spin text-blue-400" />
               <span className="text-sm text-blue-400">
-                {lStatus === "generating_dataset" ? "Генерация 15 фото для датасета..." :
+                {lStatus === "sourcing_photos" ? "Поиск реальных фото модели (Pexels)..." :
+                 lStatus === "generating_dataset" ? "Подготовка датасета из реальных фото..." :
                  lStatus === "queued" ? "В очереди на обучение..." :
-                 "Обучение LoRA модели... (5-15 мин)"}
+                 "Обучение LoRA на реальных фото... (5-15 мин)"}
               </span>
             </div>
             {loraResult?.training_photos && (
@@ -887,7 +893,7 @@ function OverviewTab({
         ) : lStatus === "trained" ? (
           <div className="space-y-2">
             <p className="text-sm text-green-400 font-medium">
-              LoRA обучена! Все фото теперь генерируются с фиксированным лицом.
+              LoRA обучена на реальных фото! Генерация фото доступна — лицо зафиксировано.
             </p>
             <div className="grid grid-cols-2 gap-3 text-xs">
               <div className="bg-zinc-800 rounded-lg p-3">
@@ -1090,30 +1096,40 @@ function GenerateTab({
             </div>
           </div>
 
-          {/* Generate button */}
-          <button
-            onClick={onPhoto}
-            disabled={photoLoading}
-            className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 px-4 py-3 rounded-lg text-sm font-medium flex items-center justify-center gap-2 transition-all"
-          >
-            {photoLoading ? (
-              <>
-                <RefreshCw className="h-4 w-4 animate-spin" /> Генерация фото (~10сек)...
-              </>
-            ) : (
-              <>
-                <Camera className="h-4 w-4" /> Сгенерировать фото
-              </>
-            )}
-          </button>
+          {/* Generate button — blocked without LoRA */}
+          {selected?.lora_training_status !== "trained" ? (
+            <div className="w-full bg-zinc-800 border border-amber-500/30 px-4 py-3 rounded-lg text-center">
+              <p className="text-sm text-amber-400 font-medium mb-1">
+                Генерация заблокирована — сначала обучите LoRA
+              </p>
+              <p className="text-xs text-zinc-400">
+                {selected?.lora_training_status === "training" || selected?.lora_training_status === "sourcing_photos"
+                  ? "Обучение уже идёт... Подождите 5-15 минут."
+                  : "Перейдите в таб 'Обзор' и нажмите 'Обучить LoRA на реальных фото'"}
+              </p>
+            </div>
+          ) : (
+            <button
+              onClick={onPhoto}
+              disabled={photoLoading}
+              className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 px-4 py-3 rounded-lg text-sm font-medium flex items-center justify-center gap-2 transition-all"
+            >
+              {photoLoading ? (
+                <>
+                  <RefreshCw className="h-4 w-4 animate-spin" /> Генерация фото (~10сек)...
+                </>
+              ) : (
+                <>
+                  <Camera className="h-4 w-4" /> Сгенерировать фото (LoRA)
+                </>
+              )}
+            </button>
+          )}
           <p className="text-xs text-zinc-500">
             {selected?.lora_training_status === "trained" ? (
-              <span className="text-green-400">LoRA активна — лицо зафиксировано (~$0.05/фото)</span>
+              <span className="text-green-400">LoRA обучена на реальных фото — лицо зафиксировано (~$0.05/фото)</span>
             ) : (
-              <>
-                ~${PHOTO_MODELS.find((m) => m.id === photoModel)?.cost || "0.025"} за фото
-                {photoUseRef && refCount > 0 && " | Идентичность через референсы"}
-              </>
+              <span className="text-amber-400">LoRA не обучена — генерация недоступна</span>
             )}
           </p>
 
