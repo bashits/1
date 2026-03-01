@@ -365,6 +365,8 @@ async def serve_file(subdir: str, filename: str):
         raise HTTPException(status_code=404, detail="Invalid directory")
 
     file_path = base_dir / filename
+    if not file_path.resolve().is_relative_to(base_dir.resolve()):
+        raise HTTPException(status_code=400, detail="Invalid filename")
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="File not found")
 

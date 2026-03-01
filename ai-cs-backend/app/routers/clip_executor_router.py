@@ -101,6 +101,7 @@ async def set_twitch_credentials(creds: TwitchCredentials):
 
     ce.TWITCH_CLIENT_ID = creds.client_id
     ce.TWITCH_CLIENT_SECRET = creds.client_secret
+    ce._twitch_token_cache.clear()
     os.environ["TWITCH_CLIENT_ID"] = creds.client_id
     os.environ["TWITCH_CLIENT_SECRET"] = creds.client_secret
 
@@ -242,6 +243,8 @@ async def serve_clip_file(file_type: str, filename: str):
         raise HTTPException(status_code=400, detail="Invalid file type")
 
     file_path = CLIPS_DIR / file_type / filename
+    if not file_path.resolve().is_relative_to((CLIPS_DIR / file_type).resolve()):
+        raise HTTPException(status_code=400, detail="Invalid filename")
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="File not found")
 

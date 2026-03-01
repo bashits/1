@@ -153,7 +153,7 @@ async def api_key_status():
     cursor = await db.execute("SELECT value FROM settings WHERE key='fal_api_key'")
     row = await cursor.fetchone()
     await db.close()
-    return {"has_key": row is not None, "key_preview": (row["value"][:6] + "...") if row else None}
+    return {"has_key": row is not None, "key_preview": (row["value"][:3] + "***") if row else None}
 
 
 # ─── TTS Endpoints ─────────────────────────────────────────────────
@@ -346,6 +346,8 @@ async def serve_generated_file(file_type: str, filename: str):
         raise HTTPException(status_code=400, detail="Invalid file type")
 
     file_path = GENERATED_DIR / file_type / filename
+    if not file_path.resolve().is_relative_to((GENERATED_DIR / file_type).resolve()):
+        raise HTTPException(status_code=400, detail="Invalid filename")
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="File not found")
 

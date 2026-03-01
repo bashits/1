@@ -1640,9 +1640,10 @@ async def get_learning(
         if ct not in type_scores:
             type_scores[ct] = {"count": 0, "total_score": 0.0, "best_prompt": ""}
         type_scores[ct]["count"] += r.get("generation_count", 1)
-        type_scores[ct]["total_score"] += r.get("success_score", 0.0)
-        if r.get("success_score", 0) > type_scores[ct]["total_score"] / max(type_scores[ct]["count"], 1):
+        current_score = r.get("success_score", 0.0)
+        if current_score > type_scores[ct]["total_score"] / max(type_scores[ct]["count"] - r.get("generation_count", 1), 1):
             type_scores[ct]["best_prompt"] = r.get("original_prompt", "")
+        type_scores[ct]["total_score"] += current_score
 
     return {
         "profile_id": profile_id,
