@@ -108,18 +108,20 @@ async def set_twitch_credentials(creds: TwitchCredentials):
     # Persist to SQLite
     from app.database import DB_PATH
     db = await aiosqlite.connect(DB_PATH)
-    await db.execute(
-        "INSERT INTO settings (key, value, updated_at) VALUES ('twitch_client_id', ?, datetime('now')) "
-        "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=datetime('now')",
-        (creds.client_id,),
-    )
-    await db.execute(
-        "INSERT INTO settings (key, value, updated_at) VALUES ('twitch_client_secret', ?, datetime('now')) "
-        "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=datetime('now')",
-        (creds.client_secret,),
-    )
-    await db.commit()
-    await db.close()
+    try:
+        await db.execute(
+            "INSERT INTO settings (key, value, updated_at) VALUES ('twitch_client_id', ?, datetime('now')) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=datetime('now')",
+            (creds.client_id,),
+        )
+        await db.execute(
+            "INSERT INTO settings (key, value, updated_at) VALUES ('twitch_client_secret', ?, datetime('now')) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=datetime('now')",
+            (creds.client_secret,),
+        )
+        await db.commit()
+    finally:
+        await db.close()
 
     return {"success": True, "message": "Twitch credentials saved and activated"}
 

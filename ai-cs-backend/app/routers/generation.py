@@ -128,13 +128,15 @@ async def set_api_key(req: SetAPIKeyRequest):
 
     # Persist to SQLite
     db = await aiosqlite.connect(DB_PATH)
-    await db.execute(
-        "INSERT INTO settings (key, value, updated_at) VALUES ('fal_api_key', ?, datetime('now')) "
-        "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=datetime('now')",
-        (req.fal_key,),
-    )
-    await db.commit()
-    await db.close()
+    try:
+        await db.execute(
+            "INSERT INTO settings (key, value, updated_at) VALUES ('fal_api_key', ?, datetime('now')) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=datetime('now')",
+            (req.fal_key,),
+        )
+        await db.commit()
+    finally:
+        await db.close()
 
     return {
         "success": True,
@@ -149,10 +151,12 @@ async def api_key_status():
     import aiosqlite
     from app.database import DB_PATH
     db = await aiosqlite.connect(DB_PATH)
-    db.row_factory = aiosqlite.Row
-    cursor = await db.execute("SELECT value FROM settings WHERE key='fal_api_key'")
-    row = await cursor.fetchone()
-    await db.close()
+    try:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT value FROM settings WHERE key='fal_api_key'")
+        row = await cursor.fetchone()
+    finally:
+        await db.close()
     return {"has_key": row is not None, "key_preview": (row["value"][:3] + "***") if row else None}
 
 

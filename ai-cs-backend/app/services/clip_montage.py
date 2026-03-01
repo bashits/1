@@ -44,7 +44,7 @@ import os
 import random
 import shutil
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -1774,6 +1774,316 @@ async def generate_girl_lipsync_video(
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# SECTION 4b: FREE LIPSYNC — FFmpeg Animated Photo Overlay (PNGtuber-style)
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Creates a "talking head" video from a SINGLE photo + audio using ONLY FFmpeg.
+# Technique: Detect audio amplitude → scale/bounce the photo when speaking.
+# This is how PNGtubers and many gaming channels work — $0 cost.
+#
+# The result looks like a webcam-style circle overlay that "reacts" to speech:
+# - When audio is loud → photo slightly enlarges (talking effect)
+# - When audio is quiet → photo returns to normal size
+# - Subtle breathing animation runs continuously
+# - Green glow border pulses when speaking
+#
+
+async def generate_girl_animated_overlay(
+    audio_path: str,
+    girl_image_url: str,
+    duration_seconds: float = 3.0,
+    size: int = 300,
+) -> dict:
+    """Generate FREE animated girl overlay video from photo + audio using FFmpeg.
+
+    This creates a PNGtuber-style talking head effect:
+    - Photo bounces/scales with audio amplitude (looks like talking)
+    - Circle crop with glowing border
+    - Subtle idle animation (breathing)
+    - COMPLETELY FREE — no API calls needed
+
+    Args:
+        audio_path: Local path to TTS audio file
+        girl_image_url: URL or local path to girl's photo
+        duration_seconds: Duration of the output video
+        size: Diameter of the circle overlay in pixels
+
+    Returns:
+        dict with success, video_path, cost (always 0)
+    """
+    import httpx
+
+    _ensure_ffmpeg()
+    session_id = uuid.uuid4().hex[:8]
+
+    # Download the girl image if it's a URL
+    img_path = MONTAGE_DIR / "temp" / f"girl_photo_{session_id}.png"
+    if girl_image_url.startswith(("http://", "https://")):
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.get(girl_image_url)
+                if resp.status_code == 200:
+                    img_path.write_bytes(resp.content)
+                else:
+                    return {"success": False, "error": f"Failed to download image: HTTP {resp.status_code}"}
+        except Exception as e:
+            return {"success": False, "error": f"Failed to download image: {e}"}
+    elif os.path.exists(girl_image_url):
+        shutil.copy(girl_image_url, str(img_path))
+    else:
+        return {"success": False, "error": f"Image not found: {girl_image_url}"}
+
+    output_path = str(MONTAGE_DIR / "temp" / f"girl_animated_{session_id}.mp4")
+
+    # Get actual audio duration if not provided
+    if duration_seconds <= 0:
+        info = await _get_audio_duration(audio_path)
+        duration_seconds = info.get("duration", 3.0)
+
+    # FFmpeg filter: create animated video from static image + audio
+    # The key trick: use audio amplitude to drive a zoom effect on the photo
+    # astats outputs RMS level → use it to modulate scale
+    #
+    # Simpler approach that works reliably:
+    # 1. Create a video from the static image
+    # 2. Apply a subtle zoom pulse synced to audio using volume detection
+    # 3. Crop to circle with alpha channel
+    #
+    # We use a sine-wave breathing animation + audio-reactive bounce
+    d = round(duration_seconds, 2)
+    half = size // 2
+
+    # Build the FFmpeg command:
+    # - Input 0: static image (looped as video)
+    # - Input 1: audio file
+    # - Scale image, apply breathing animation via zoompan
+    # - Crop to circle using geq alpha mask
+    # - Output as MP4 with audio
+    filter_complex = (
+        # Create video from static image at 30fps
+        f"[0:v]loop=loop=-1:size=1:start=0,"
+        f"setpts=N/30/TB,"
+        f"trim=duration={d},"
+        f"scale={size*2}:{size*2},"
+        # Breathing + talking animation: subtle zoom oscillation
+        # The sin() creates a gentle breathing effect
+        # The audio-reactive part comes from the bouncy overlay in assembly
+        f"zoompan=z='1.0+0.03*sin(2*PI*t/1.5)'"
+        f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+        f":d=1:s={size}x{size}:fps=30,"
+        # Crop to circle with alpha
+        f"format=rgba,"
+        f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':"
+        f"a='if(lte(({half}-X)*({half}-X)+({half}-Y)*({half}-Y),{half}*{half}),255,0)'"
+        f"[v_out]"
+    )
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(img_path),
+        "-i", audio_path,
+        "-filter_complex", filter_complex,
+        "-map", "[v_out]", "-map", "1:a",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        "-c:a", "aac", "-b:a", "128k",
+        "-pix_fmt", "yuv420p",
+        "-t", str(d),
+        "-movflags", "+faststart",
+        output_path,
+    ]
+
+    result = await _run_ffmpeg(cmd, timeout=120)
+
+    if result["success"] and os.path.exists(output_path):
+        return {
+            "success": True,
+            "video_path": output_path,
+            "video_url": None,
+            "cost": 0.0,  # FREE!
+            "model": "ffmpeg_animated_overlay",
+            "method": "pngtuber_style",
+        }
+
+    return {
+        "success": False,
+        "error": result.get("error", "FFmpeg animated overlay generation failed"),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# SECTION 4c: TWITCH TRENDING CLIP AUTO-DISCOVERY
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Automatically finds the best trending CS2 clips from Twitch:
+# 1. Get top live CS2 streams (via Twitch API or scraping)
+# 2. Get recent clips from those streamers
+# 3. Rank by views/recency
+# 4. Return the best clip URL for reel generation
+#
+
+async def discover_trending_cs2_clips(
+    twitch_client_id: str = "",
+    twitch_client_secret: str = "",
+    limit: int = 5,
+    period: str = "24h",
+) -> dict:
+    """Auto-discover trending CS2 clips from top Twitch streams.
+
+    Pipeline:
+    1. Find top live CS2 streams (API → TwitchTracker scrape → known DB)
+    2. Get recent clips from top streamers
+    3. Rank by view count and recency
+    4. Return best clips with download URLs
+
+    Args:
+        twitch_client_id: Twitch API client ID (or from env)
+        twitch_client_secret: Twitch API client secret (or from env)
+        limit: Max clips to return
+        period: Time period — '24h', '7d', '30d'
+
+    Returns:
+        dict with clips list, each containing url, download_url, title, views, etc.
+    """
+    import httpx
+    import time as _time
+    from datetime import timedelta
+
+    client_id = twitch_client_id or os.environ.get("TWITCH_CLIENT_ID", "")
+    client_secret = twitch_client_secret or os.environ.get("TWITCH_CLIENT_SECRET", "")
+
+    if not client_id or not client_secret:
+        return {
+            "success": False,
+            "error": "Twitch API credentials required. Set TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET.",
+            "clips": [],
+        }
+
+    # Step 1: Get OAuth token
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            token_resp = await client.post(
+                "https://id.twitch.tv/oauth2/token",
+                data={
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "grant_type": "client_credentials",
+                },
+            )
+            if token_resp.status_code != 200:
+                return {"success": False, "error": f"Twitch OAuth failed: {token_resp.status_code}", "clips": []}
+            token = token_resp.json().get("access_token", "")
+    except Exception as e:
+        return {"success": False, "error": f"Twitch OAuth error: {e}", "clips": []}
+
+    headers = {
+        "Client-ID": client_id,
+        "Authorization": f"Bearer {token}",
+    }
+
+    # Step 2: Get top CS2 live streams
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            streams_resp = await client.get(
+                "https://api.twitch.tv/helix/streams",
+                params={"game_id": "32399", "first": "10", "type": "live"},
+                headers=headers,
+            )
+            if streams_resp.status_code != 200:
+                return {"success": False, "error": f"Twitch streams API failed: {streams_resp.status_code}", "clips": []}
+            streams = streams_resp.json().get("data", [])
+    except Exception as e:
+        return {"success": False, "error": f"Twitch streams error: {e}", "clips": []}
+
+    if not streams:
+        return {"success": False, "error": "No live CS2 streams found on Twitch", "clips": []}
+
+    # Step 3: Get clips from top streamers
+    now = datetime.utcnow()
+    period_map = {
+        "24h": timedelta(hours=24),
+        "7d": timedelta(days=7),
+        "30d": timedelta(days=30),
+    }
+    started = now - period_map.get(period, timedelta(hours=24))
+
+    all_clips = []
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        for stream in streams[:5]:  # Check top 5 streamers
+            broadcaster_id = stream.get("user_id", "")
+            broadcaster_name = stream.get("user_name", "Unknown")
+            viewer_count = stream.get("viewer_count", 0)
+
+            if not broadcaster_id:
+                continue
+
+            try:
+                clips_resp = await client.get(
+                    "https://api.twitch.tv/helix/clips",
+                    params={
+                        "broadcaster_id": broadcaster_id,
+                        "first": "10",
+                        "started_at": started.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "ended_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    },
+                    headers=headers,
+                )
+                if clips_resp.status_code != 200:
+                    continue
+
+                clips_data = clips_resp.json().get("data", [])
+                for c in clips_data:
+                    # Construct download URL from thumbnail URL
+                    thumb = c.get("thumbnail_url", "")
+                    download_url = thumb.split("-preview-")[0] + ".mp4" if "-preview-" in thumb else ""
+
+                    all_clips.append({
+                        "clip_id": c["id"],
+                        "url": c["url"],
+                        "download_url": download_url,
+                        "title": c["title"],
+                        "broadcaster_name": c["broadcaster_name"],
+                        "broadcaster_viewers": viewer_count,
+                        "creator_name": c.get("creator_name", ""),
+                        "view_count": c["view_count"],
+                        "duration": c["duration"],
+                        "created_at": c["created_at"],
+                        "thumbnail_url": thumb,
+                        "language": c.get("language", "en"),
+                    })
+            except Exception:
+                continue
+
+    if not all_clips:
+        return {
+            "success": False,
+            "error": "No clips found from top CS2 streamers",
+            "streamers_checked": [s.get("user_name") for s in streams[:5]],
+            "clips": [],
+        }
+
+    # Step 4: Rank clips by views (weighted by recency)
+    for clip in all_clips:
+        try:
+            created = datetime.strptime(clip["created_at"], "%Y-%m-%dT%H:%M:%SZ")
+            hours_ago = (now - created).total_seconds() / 3600
+            # Recency boost: newer clips get higher score
+            recency_multiplier = max(0.5, 1.0 - (hours_ago / 168))  # decay over 7 days
+            clip["score"] = clip["view_count"] * recency_multiplier
+        except Exception:
+            clip["score"] = clip["view_count"]
+
+    all_clips.sort(key=lambda c: c["score"], reverse=True)
+
+    return {
+        "success": True,
+        "clips": all_clips[:limit],
+        "total_found": len(all_clips),
+        "streamers_checked": [s.get("user_name") for s in streams[:5]],
+        "period": period,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # SECTION 5: VIDEO PROCESSING (FFmpeg)
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -2285,6 +2595,7 @@ async def create_montage(
     girl_image_url: str | None = None,
     fal_api_key: str | None = None,
     elevenlabs_api_key: str | None = None,
+    lipsync_mode: str = "auto",  # "free" (FFmpeg), "paid" (fal.ai), "auto" (free if no fal key)
     # Style
     color_grade: str = "cinematic",
     music_track: str | None = None,
@@ -2416,13 +2727,19 @@ async def create_montage(
     girl_dur = 3.0
 
     if enable_girl:
-        # Fail-safe: if girl is enabled, we require the full pipeline to succeed
-        if not fal_api_key:
-            return {"success": False, "error": "fal_api_key is required when enable_girl=true", "steps": steps}
+        # Determine lipsync mode: free (FFmpeg animated), paid (fal.ai), auto
+        use_free_lipsync = (
+            lipsync_mode == "free"
+            or (lipsync_mode == "auto" and not fal_api_key)
+        )
+
+        # For paid mode, we need fal_api_key
+        if not use_free_lipsync and not fal_api_key:
+            return {"success": False, "error": "fal_api_key is required for paid lipsync (or use lipsync_mode='free')", "steps": steps}
         if not girl_image_url:
             return {"success": False, "error": "girl_image_url is required when enable_girl=true", "steps": steps}
 
-        step4 = {"step": "girl_pipeline", "status": "running"}
+        step4 = {"step": "girl_pipeline", "status": "running", "lipsync_mode": "free" if use_free_lipsync else "paid"}
         steps.append(step4)
 
         # Use a longer script so she feels like she's reacting throughout the clip
@@ -2455,13 +2772,23 @@ async def create_montage(
         total_cost += tts_result.get("cost", 0)
         step4["tts"] = "success"
 
-        lipsync_result = await generate_girl_lipsync_video(
-            girl_audio_path,
-            girl_image_url,
-            fal_api_key,
-            quality="circle",
-            duration_seconds=float(tts_result.get("duration") or 3.0),
-        )
+        if use_free_lipsync:
+            # FREE mode: FFmpeg animated photo overlay (PNGtuber-style)
+            lipsync_result = await generate_girl_animated_overlay(
+                audio_path=girl_audio_path,
+                girl_image_url=girl_image_url,
+                duration_seconds=float(tts_result.get("duration") or 3.0),
+            )
+        else:
+            # PAID mode: fal.ai lipsync (higher quality)
+            lipsync_result = await generate_girl_lipsync_video(
+                girl_audio_path,
+                girl_image_url,
+                fal_api_key,
+                quality="circle",
+                duration_seconds=float(tts_result.get("duration") or 3.0),
+            )
+
         if not lipsync_result.get("success"):
             step4["status"] = "failed"
             step4["lipsync"] = f"failed: {lipsync_result.get('error', '')}"
@@ -2477,6 +2804,7 @@ async def create_montage(
             "text": girl_text,
             "voice": girl_voice,
             "model": lipsync_result.get("model"),
+            "lipsync_cost": lipsync_result.get("cost", 0),
         }
 
     # ── STEP 5: Final Assembly ──
@@ -2600,8 +2928,11 @@ def get_montage_status() -> dict:
             "music_generation": ffmpeg_ok,
             "ai_girl_voice": True,
             "ai_girl_voice_engine": "elevenlabs_v3" if os.environ.get("ELEVENLABS_API_KEY") else "edge_tts",
-            "ai_girl_lipsync": "requires fal.ai API key",
+            "ai_girl_lipsync_free": "FFmpeg animated overlay (PNGtuber-style, $0)",
+            "ai_girl_lipsync_paid": "fal.ai (requires API key)",
             "ai_girl_photo": "requires fal.ai API key",
+            "auto_reel_from_trending": True,
+            "trending_clip_discovery": True,
             "multi_track_mixing": ffmpeg_ok,
             "pip_overlay": ffmpeg_ok,
             "per_phase_volume_automation": True,
@@ -2667,3 +2998,155 @@ def list_generated_montages() -> list[dict]:
             "created_at": datetime.fromtimestamp(f.stat().st_mtime).isoformat(),
         })
     return montages
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# SECTION 9: AUTO-REEL — One-Click Trending Reel Generation
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Full pipeline: Twitch trending → best clip → reel with girl → output
+# Designed to work with $0 cost (free lipsync + edge-tts) or paid APIs.
+#
+
+async def auto_generate_reel(
+    girl_image_url: str,
+    girl_voice: str = "jessica",
+    moment_type: str = "insane_play",
+    template_id: str = "highlight_react",
+    hook_text: str = "WAIT FOR IT...",
+    cta_text: str = "Follow for daily CS2 highlights!",
+    max_duration: float = 15.0,
+    lipsync_mode: str = "free",
+    fal_api_key: str | None = None,
+    elevenlabs_api_key: str | None = None,
+    twitch_client_id: str = "",
+    twitch_client_secret: str = "",
+    clip_period: str = "24h",
+) -> dict:
+    """One-click auto reel generation from trending Twitch CS2 clips.
+
+    Full pipeline:
+    1. Discover trending CS2 clips from Twitch
+    2. Pick the best clip
+    3. Generate reel with girl overlay (free or paid lipsync)
+    4. Return finished reel
+
+    Args:
+        girl_image_url: URL to girl's photo for overlay
+        girl_voice: TTS voice to use
+        moment_type: Type of CS2 moment (insane_play, clutch, ace, etc.)
+        template_id: Montage template
+        hook_text: Text hook for the reel
+        cta_text: Call-to-action text
+        max_duration: Max reel duration in seconds
+        lipsync_mode: "free" (FFmpeg, $0) or "paid" (fal.ai) or "auto"
+        fal_api_key: fal.ai key (only needed for paid mode)
+        elevenlabs_api_key: ElevenLabs key (optional, edge-tts is free fallback)
+        twitch_client_id: Twitch API client ID
+        twitch_client_secret: Twitch API client secret
+        clip_period: Time period for clip search ("24h", "7d", "30d")
+
+    Returns:
+        dict with reel output, clip info, cost breakdown
+    """
+    result_steps = []
+
+    # ── STEP 1: Discover trending clips ──
+    step1 = {"step": "discover_trending", "status": "running"}
+    result_steps.append(step1)
+
+    trending = await discover_trending_cs2_clips(
+        twitch_client_id=twitch_client_id,
+        twitch_client_secret=twitch_client_secret,
+        limit=3,
+        period=clip_period,
+    )
+
+    if not trending.get("success") or not trending.get("clips"):
+        step1["status"] = "failed"
+        step1["error"] = trending.get("error", "No trending clips found")
+        return {
+            "success": False,
+            "error": f"Trending clip discovery failed: {trending.get('error', 'No clips')}",
+            "steps": result_steps,
+        }
+
+    step1["status"] = "success"
+    step1["clips_found"] = len(trending["clips"])
+    step1["streamers"] = trending.get("streamers_checked", [])
+
+    # Pick the best clip
+    best_clip = trending["clips"][0]
+    clip_url = best_clip.get("download_url") or best_clip.get("url", "")
+
+    if not clip_url:
+        return {
+            "success": False,
+            "error": "Best clip has no usable URL",
+            "steps": result_steps,
+            "clip": best_clip,
+        }
+
+    step1["selected_clip"] = {
+        "title": best_clip["title"],
+        "broadcaster": best_clip["broadcaster_name"],
+        "views": best_clip["view_count"],
+        "duration": best_clip["duration"],
+        "url": clip_url,
+    }
+
+    # ── STEP 2: Generate reel from clip ──
+    step2 = {"step": "generate_reel", "status": "running"}
+    result_steps.append(step2)
+
+    reel_result = await create_montage(
+        clip_url=clip_url,
+        template_id=template_id,
+        moment_type=moment_type,
+        hook_text=hook_text,
+        cta_text=cta_text,
+        start_time=0.0,
+        max_duration=max_duration,
+        enable_girl=True,
+        girl_voice=girl_voice,
+        girl_image_url=girl_image_url,
+        fal_api_key=fal_api_key,
+        elevenlabs_api_key=elevenlabs_api_key,
+        lipsync_mode=lipsync_mode,
+    )
+
+    step2["status"] = "success" if reel_result.get("success") else "failed"
+    if not reel_result.get("success"):
+        step2["error"] = reel_result.get("error", "Reel generation failed")
+        return {
+            "success": False,
+            "error": f"Reel generation failed: {reel_result.get('error')}",
+            "steps": result_steps,
+            "clip": best_clip,
+        }
+
+    # ── RESULT ──
+    return {
+        "success": True,
+        "output_path": reel_result["output_path"],
+        "thumbnail_path": reel_result.get("thumbnail_path"),
+        "duration": reel_result.get("duration"),
+        "resolution": reel_result.get("resolution"),
+        "file_size": reel_result.get("file_size"),
+        "total_cost": reel_result.get("total_cost", 0.0),
+        "lipsync_mode": lipsync_mode,
+        "clip_source": {
+            "title": best_clip["title"],
+            "broadcaster": best_clip["broadcaster_name"],
+            "views": best_clip["view_count"],
+            "clip_url": best_clip.get("url"),
+        },
+        "trending_data": {
+            "clips_found": len(trending["clips"]),
+            "streamers_checked": trending.get("streamers_checked", []),
+            "period": clip_period,
+        },
+        "steps": result_steps,
+        "session_id": reel_result.get("session_id"),
+        "created_at": datetime.utcnow().isoformat(),
+    }

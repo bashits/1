@@ -135,6 +135,15 @@ LIPSYNC_MODELS = {
         "input_type": "video",  # video + audio → lip-synced video
         "best_for": ["budget", "quick", "testing"],
     },
+    "ffmpeg_free": {
+        "id": "local/ffmpeg-animated-overlay",
+        "name": "FFmpeg Animated Overlay (FREE — PNGtuber-style)",
+        "quality": 5,
+        "cost_per_second": 0.0,  # $0.00 — completely free, runs locally
+        "input_type": "image",  # image + audio → animated video (local FFmpeg)
+        "best_for": ["free", "budget", "cs2_reels", "circle_overlay", "pngtuber"],
+        "note": "Uses FFmpeg zoompan + breathing animation. No API calls needed.",
+    },
 }
 
 VIDEO_MODELS = {

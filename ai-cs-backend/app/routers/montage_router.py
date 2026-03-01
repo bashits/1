@@ -27,6 +27,8 @@ from app.services.clip_montage import (
     generate_music_track,
     generate_girl_audio,
     ensure_assets_ready,
+    discover_trending_cs2_clips,
+    auto_generate_reel,
     DRAMATURGY_TEMPLATES,
     SFX_CATALOG,
     MUSIC_TRACKS,
@@ -56,8 +58,29 @@ class CreateMontageRequest(BaseModel):
     girl_profile_id: Optional[int] = None  # Auto-save reel to girl's content
     fal_api_key: Optional[str] = None
     elevenlabs_api_key: Optional[str] = None
+    lipsync_mode: str = "auto"  # "free" (FFmpeg, $0), "paid" (fal.ai), "auto"
     color_grade: str = "cinematic"
     music_track: Optional[str] = None
+
+
+class TrendingClipsRequest(BaseModel):
+    period: str = "24h"  # "24h", "7d", "30d"
+    limit: int = 5
+
+
+class AutoReelRequest(BaseModel):
+    girl_image_url: str
+    girl_voice: str = "jessica"
+    girl_profile_id: Optional[int] = None
+    moment_type: str = "insane_play"
+    template_id: str = "highlight_react"
+    hook_text: str = "WAIT FOR IT..."
+    cta_text: str = "Follow for daily CS2 highlights!"
+    max_duration: float = 15.0
+    lipsync_mode: str = "free"  # "free" (FFmpeg, $0), "paid" (fal.ai), "auto"
+    fal_api_key: Optional[str] = None
+    elevenlabs_api_key: Optional[str] = None
+    clip_period: str = "24h"
 
 
 class GenerateSFXRequest(BaseModel):
@@ -248,6 +271,7 @@ async def create_montage_endpoint(
         girl_image_url=girl_image_url,
         fal_api_key=fal_api_key,
         elevenlabs_api_key=elevenlabs_api_key,
+        lipsync_mode=req.lipsync_mode,
         color_grade=req.color_grade,
         music_track=req.music_track,
     )
@@ -553,6 +577,179 @@ async def produce_and_edit_endpoint(req: ProduceAndEditRequest):
         video_duration=req.video_duration,
     )
     return result
+
+
+@router.post("/trending-clips")
+async def trending_clips_endpoint(req: TrendingClipsRequest):
+    """
+    Discover trending CS2 clips from top Twitch streams.
+
+    Auto-finds the best clips from currently live top CS2 streamers.
+    Uses Twitch API (requires TWITCH_CLIENT_ID + TWITCH_CLIENT_SECRET).
+    Returns clips ranked by views × recency.
+    """
+    result = await discover_trending_cs2_clips(
+        twitch_client_id=os.environ.get("TWITCH_CLIENT_ID", ""),
+        twitch_client_secret=os.environ.get("TWITCH_CLIENT_SECRET", ""),
+        limit=req.limit,
+        period=req.period,
+    )
+    return result
+
+
+@router.post("/auto-reel")
+async def auto_reel_endpoint(
+    req: AutoReelRequest,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """
+    One-click auto reel generation from trending Twitch CS2 clips.
+
+    Full pipeline:
+    1. Auto-discover trending CS2 clips from Twitch
+    2. Pick the best clip by views × recency
+    3. Generate reel with girl overlay (free or paid lipsync)
+    4. Return finished reel
+
+    lipsync_mode:
+    - "free": FFmpeg animated photo overlay ($0 cost)
+    - "paid": fal.ai lipsync (higher quality, requires API key)
+    - "auto": uses free if no fal.ai key available
+    """
+    fal_api_key = req.fal_api_key or os.environ.get("FAL_KEY")
+    elevenlabs_api_key = req.elevenlabs_api_key or os.environ.get("ELEVENLABS_API_KEY")
+
+    # Auto-resolve girl_image_url from profile if profile_id provided
+    girl_image_url = req.girl_image_url
+    if req.girl_profile_id and not girl_image_url:
+        try:
+            cursor = await db.execute(
+                "SELECT image_url FROM profile_gallery "
+                "WHERE profile_id = ? AND is_reference = 1 AND is_approved = 1 "
+                "ORDER BY quality_rating DESC, created_at DESC LIMIT 1",
+                (req.girl_profile_id,),
+            )
+            row = await cursor.fetchone()
+            if row:
+                girl_image_url = row[0]
+            else:
+                cursor = await db.execute(
+                    "SELECT reference_images FROM ai_profiles WHERE id = ?",
+                    (req.girl_profile_id,),
+                )
+                row = await cursor.fetchone()
+                if row:
+                    imgs = json.loads(row[0] or "[]")
+                    if imgs:
+                        girl_image_url = imgs[0] if isinstance(imgs[0], str) else imgs[0].get("url")
+        except Exception:
+            pass
+
+    result = await auto_generate_reel(
+        girl_image_url=girl_image_url,
+        girl_voice=req.girl_voice,
+        moment_type=req.moment_type,
+        template_id=req.template_id,
+        hook_text=req.hook_text,
+        cta_text=req.cta_text,
+        max_duration=req.max_duration,
+        lipsync_mode=req.lipsync_mode,
+        fal_api_key=fal_api_key,
+        elevenlabs_api_key=elevenlabs_api_key,
+        twitch_client_id=os.environ.get("TWITCH_CLIENT_ID", ""),
+        twitch_client_secret=os.environ.get("TWITCH_CLIENT_SECRET", ""),
+        clip_period=req.clip_period,
+    )
+
+    # Auto-save to girl's content if profile_id provided and reel succeeded
+    if req.girl_profile_id and result.get("success"):
+        try:
+            file_path = result.get("output_path", "")
+            filename = file_path.split("/")[-1] if file_path else None
+            serve_url = f"/api/montage/files/output/{filename}" if filename else None
+
+            metadata = json.dumps({
+                "moment_type": req.moment_type,
+                "template_id": req.template_id,
+                "voice": req.girl_voice,
+                "lipsync_mode": req.lipsync_mode,
+                "auto_reel": True,
+                "clip_source": result.get("clip_source"),
+                "trending_data": result.get("trending_data"),
+            })
+
+            cursor = await db.execute(
+                """INSERT INTO content_items
+                   (profile_id, content_type, title, prompt, file_path, file_url, duration, cost, status, metadata)
+                   VALUES (?, 'reel', ?, ?, ?, ?, ?, ?, 'completed', ?)""",
+                (
+                    req.girl_profile_id,
+                    f"Auto CS2 {req.moment_type} Reel",
+                    req.hook_text,
+                    file_path,
+                    serve_url,
+                    result.get("duration", 0),
+                    result.get("total_cost", 0.0),
+                    metadata,
+                ),
+            )
+            content_id = cursor.lastrowid
+            await db.execute(
+                "UPDATE ai_profiles SET total_videos = total_videos + 1, "
+                "total_cost = total_cost + ?, updated_at = datetime('now') WHERE id = ?",
+                (result.get("total_cost", 0.0), req.girl_profile_id),
+            )
+            await db.commit()
+            result["saved_to_profile"] = {
+                "profile_id": req.girl_profile_id,
+                "content_id": content_id,
+            }
+        except Exception as e:
+            result["save_error"] = str(e)
+
+    return result
+
+
+@router.get("/cost-comparison")
+async def cost_comparison():
+    """
+    Show cost comparison: free vs paid lipsync modes.
+
+    Helps user understand savings from using free FFmpeg lipsync
+    vs paid fal.ai models for CS2 reel generation.
+    """
+    from app.services.content_generation import LIPSYNC_MODELS
+    comparison = {
+        "free_mode": {
+            "lipsync": "FFmpeg Animated Overlay (PNGtuber-style)",
+            "lipsync_cost_per_second": 0.0,
+            "voice_free": "edge-tts (Microsoft, free)",
+            "voice_paid": "ElevenLabs v3 (~$0.001/char)",
+            "total_per_15s_reel_free_voice": 0.0,
+            "total_per_15s_reel_paid_voice": 0.01,
+            "quality_rating": 5,
+            "notes": "Breathing animation + zoom pulse. Good for CS2 reels. No API needed.",
+        },
+        "paid_modes": {},
+    }
+    for model_key, model in LIPSYNC_MODELS.items():
+        if model_key == "ffmpeg_free":
+            continue
+        cost_15s = model.get("cost_per_second", 0) * 15
+        if model.get("cost_flat_under_40s"):
+            cost_15s = model["cost_flat_under_40s"]
+        comparison["paid_modes"][model_key] = {
+            "name": model["name"],
+            "cost_per_15s_reel": round(cost_15s, 3),
+            "quality_rating": model["quality"],
+            "input_type": model["input_type"],
+        }
+    comparison["savings_per_reel"] = {
+        "vs_veed_fabric": f"${round(0.08 * 15, 2)}/reel saved",
+        "vs_kling_avatar": f"${round(0.115 * 15, 2)}/reel saved",
+        "vs_omnihuman": f"${round(0.16 * 15, 2)}/reel saved",
+    }
+    return comparison
 
 
 @router.post("/upload-clip")
