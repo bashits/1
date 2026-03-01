@@ -1708,7 +1708,7 @@ async def generate_girl_lipsync_video(
 
     if duration_seconds is None:
         try:
-            duration_seconds = await _get_audio_duration(audio_path)
+            duration_seconds = (await _get_audio_duration(audio_path)).get("duration", 3.0)
         except Exception:
             duration_seconds = 3.0
 
