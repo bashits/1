@@ -125,6 +125,13 @@ export const api = {
   // Prompt Learning / Auto-improvement
   getProfileLearning: (id: number) => apiFetch<ProfileLearningResponse>(`/api/ai-profiles/${id}/learning`),
 
+  // LoRA Training & Management
+  trainLora: (id: number, data?: TrainLoraReq) =>
+    apiFetch<TrainLoraResult>(`/api/ai-profiles/${id}/train-lora`, { method: "POST", body: JSON.stringify(data || {}) }),
+  getLoraStatus: (id: number) => apiFetch<LoraStatus>(`/api/ai-profiles/${id}/lora-status`),
+  completeLoraTraining: (id: number) =>
+    apiFetch<TrainLoraResult>(`/api/ai-profiles/${id}/complete-lora-training`, { method: "POST" }),
+
   // Tool Registry
   getTools: (category?: string) =>
     apiFetch<Tool[]>(`/api/tools/${category ? `?category=${category}` : ""}`),
@@ -400,6 +407,10 @@ export interface AIProfile {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+  lora_model_url?: string | null;
+  lora_trigger_word?: string | null;
+  lora_training_status?: string;
+  lora_trained_at?: string | null;
 }
 
 export interface ProfilePresets {
@@ -534,6 +545,38 @@ export interface GenPhotoReq {
   model_key?: string;
   use_reference_images?: boolean;
   set_as_reference?: boolean;
+  use_lora?: boolean;
+  lora_scale?: number;
+  custom_scene?: string;
+}
+
+export interface TrainLoraReq {
+  num_photos?: number;
+  steps?: number;
+  trigger_word?: string;
+}
+
+export interface TrainLoraResult {
+  success: boolean;
+  profile_id?: number;
+  trigger_word?: string;
+  request_id?: string;
+  training_photos?: number;
+  steps?: number;
+  estimated_cost?: number;
+  status?: string;
+  message?: string;
+  error?: string;
+}
+
+export interface LoraStatus {
+  profile_id: number;
+  lora_status: string;
+  lora_model_url?: string | null;
+  lora_trigger_word?: string | null;
+  lora_trained_at?: string | null;
+  training_record?: Record<string, unknown> | null;
+  config?: { training_cost: number; inference_cost: number };
 }
 
 export interface PhotoResult {
@@ -545,6 +588,7 @@ export interface PhotoResult {
   cost_estimate?: number;
   total_cost?: number;
   used_reference_images?: boolean;
+  used_lora?: boolean;
   gallery_ids?: number[];
   error?: string;
 }

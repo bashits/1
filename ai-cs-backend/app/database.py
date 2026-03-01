@@ -354,6 +354,27 @@ async def init_db():
         FOREIGN KEY (profile_id) REFERENCES ai_profiles(id) ON DELETE CASCADE
     );
 
+    -- LoRA models: trained face identity models per girl
+    CREATE TABLE IF NOT EXISTS lora_models (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        profile_id INTEGER NOT NULL,
+        trigger_word TEXT NOT NULL,
+        lora_url TEXT,
+        lora_weights_url TEXT,
+        config_url TEXT,
+        training_status TEXT NOT NULL DEFAULT 'pending',
+        training_steps INTEGER NOT NULL DEFAULT 1000,
+        training_images_count INTEGER NOT NULL DEFAULT 0,
+        training_cost REAL NOT NULL DEFAULT 0.0,
+        training_started_at TEXT,
+        training_completed_at TEXT,
+        fal_request_id TEXT,
+        error TEXT,
+        metadata TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        FOREIGN KEY (profile_id) REFERENCES ai_profiles(id) ON DELETE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS region_analysis (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         region TEXT NOT NULL,
@@ -491,6 +512,24 @@ async def init_db():
         pass
     try:
         await db.execute("ALTER TABLE ai_profiles ADD COLUMN total_cost REAL NOT NULL DEFAULT 0.0")
+    except Exception:
+        pass
+
+    # LoRA fields on ai_profiles
+    try:
+        await db.execute("ALTER TABLE ai_profiles ADD COLUMN lora_model_url TEXT")
+    except Exception:
+        pass
+    try:
+        await db.execute("ALTER TABLE ai_profiles ADD COLUMN lora_trigger_word TEXT")
+    except Exception:
+        pass
+    try:
+        await db.execute("ALTER TABLE ai_profiles ADD COLUMN lora_training_status TEXT NOT NULL DEFAULT 'not_trained'")
+    except Exception:
+        pass
+    try:
+        await db.execute("ALTER TABLE ai_profiles ADD COLUMN lora_trained_at TEXT")
     except Exception:
         pass
 

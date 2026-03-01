@@ -39,6 +39,16 @@ from app.services.voice_engine import (
     VOICE_PERSONAS,
     VOICE_ENHANCEMENT_TIPS,
 )
+from app.services.lora_service import (
+    generate_training_dataset,
+    start_lora_training,
+    check_training_status,
+    wait_for_training,
+    generate_photo_with_lora,
+    build_lora_prompt,
+    LORA_TRAINING_CONFIG,
+    LORA_INFERENCE_CONFIG,
+)
 
 router = APIRouter(prefix="/api/ai-profiles", tags=["ai-profiles"])
 
@@ -120,6 +130,15 @@ class GeneratePhotoRequest(BaseModel):
     model_key: str = "flux2_realism"
     use_reference_images: bool = True
     set_as_reference: bool = False
+    use_lora: bool = True  # Auto-use LoRA if trained
+    lora_scale: float = 1.0
+    custom_scene: Optional[str] = None
+
+
+class TrainLoraRequest(BaseModel):
+    num_photos: int = 15  # Training dataset size (10-20 optimal)
+    steps: int = 1000  # Training steps
+    trigger_word: Optional[str] = None  # Auto-generated if not provided
 
 
 class GenerateVideoRequest(BaseModel):
@@ -554,8 +573,10 @@ async def generate_photo(
 ):
     """Generate photo(s) for this girl.
 
-    If the profile has reference_images and use_reference_images=true, we use FLUX 2 Pro
-    multi-reference to keep the same identity.
+    Priority:
+    1. If LoRA is trained and use_lora=true → use fal-ai/flux-lora (100% face consistency)
+    2. If reference_images available → use FLUX 2 Pro multi-reference
+    3. Otherwise → use FLUX Realism
     """
     cursor = await db.execute("SELECT * FROM ai_profiles WHERE id = ?", (profile_id,))
     row = await cursor.fetchone()
@@ -563,7 +584,6 @@ async def generate_photo(
         raise HTTPException(status_code=404, detail="Profile not found")
 
     profile = _parse_profile(row)
-    prompt = req.prompt or generate_image_prompt(profile, req.content_type)
 
     reference_images = profile.get("reference_images") or []
     if not isinstance(reference_images, list):
@@ -574,8 +594,40 @@ async def generate_photo(
         generate_photo_with_face as fal_generate_photo_with_face,
     )
 
+    lora_url = profile.get("lora_model_url")
+    trigger_word = profile.get("lora_trigger_word")
+    lora_status = profile.get("lora_training_status", "not_trained")
+
     used_reference_images = False
-    if req.use_reference_images and reference_images:
+    used_lora = False
+
+    # Priority 1: LoRA-based generation (best face consistency)
+    if req.use_lora and lora_url and trigger_word and lora_status == "trained":
+        appearance = profile.get("appearance", {})
+        if req.prompt:
+            # Prepend trigger word to custom prompt
+            lora_prompt = f"{trigger_word}, {req.prompt}"
+        else:
+            lora_prompt = build_lora_prompt(
+                trigger_word=trigger_word,
+                appearance=appearance,
+                content_type=req.content_type,
+                custom_scene=req.custom_scene or "",
+            )
+        result = await generate_photo_with_lora(
+            prompt=lora_prompt,
+            lora_url=lora_url,
+            lora_scale=req.lora_scale,
+            width=req.width,
+            height=req.height,
+            num_images=req.num_images,
+            guidance_scale=3.5,
+            num_inference_steps=28,
+        )
+        used_lora = result.get("lora_used", False)
+    # Priority 2: Reference image based generation
+    elif req.use_reference_images and reference_images:
+        prompt = req.prompt or generate_image_prompt(profile, req.content_type)
         used_reference_images = True
         result = await fal_generate_photo_with_face(
             prompt=prompt,
@@ -585,7 +637,9 @@ async def generate_photo(
             height=req.height,
             method="flux2_pro",
         )
+    # Priority 3: Standard generation
     else:
+        prompt = req.prompt or generate_image_prompt(profile, req.content_type)
         result = await fal_generate_photo(
             prompt=prompt,
             width=req.width,
@@ -685,6 +739,7 @@ async def generate_photo(
         await db.commit()
 
         result["used_reference_images"] = used_reference_images
+        result["used_lora"] = used_lora
         result["total_cost"] = total_cost
         result["gallery_ids"] = gallery_ids
 
@@ -1383,3 +1438,309 @@ async def get_learning(
         "content_type_performance": type_scores,
         "total_learned_prompts": len(result),
     }
+
+
+# ─── LoRA Training & Management ─────────────────────────────────────
+
+@router.post("/{profile_id}/train-lora")
+async def train_lora(
+    profile_id: int,
+    req: TrainLoraRequest,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Train a LoRA model for this girl's face identity.
+
+    Flow:
+    1. Generate 10-20 diverse base photos using FLUX Realism
+    2. Pack into zip with captions
+    3. Upload to fal.ai and start training (~$2, 5-15 min)
+    4. Store LoRA URL when complete
+
+    After training, all photo generation auto-uses LoRA for 100% face consistency.
+    """
+    cursor = await db.execute("SELECT * FROM ai_profiles WHERE id = ?", (profile_id,))
+    row = await cursor.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    profile = _parse_profile(row)
+
+    # Check if already training
+    current_status = profile.get("lora_training_status", "not_trained")
+    if current_status == "training":
+        raise HTTPException(status_code=409, detail="LoRA training already in progress")
+
+    appearance = profile.get("appearance", {})
+    if not appearance:
+        raise HTTPException(status_code=400, detail="Profile has no appearance data")
+
+    # Generate trigger word from profile name
+    trigger_word = req.trigger_word
+    if not trigger_word:
+        name_slug = profile.get("name", "girl").lower().replace(" ", "_")[:10]
+        trigger_word = f"{name_slug}_{profile_id}G"
+
+    # Step 1: Generate training dataset
+    await db.execute(
+        "UPDATE ai_profiles SET lora_training_status = 'generating_dataset', lora_trigger_word = ?, updated_at = datetime('now') WHERE id = ?",
+        (trigger_word, profile_id),
+    )
+    await db.commit()
+
+    photos = await generate_training_dataset(
+        appearance=appearance,
+        trigger_word=trigger_word,
+        num_photos=req.num_photos,
+    )
+
+    if len(photos) < 5:
+        await db.execute(
+            "UPDATE ai_profiles SET lora_training_status = 'failed', updated_at = datetime('now') WHERE id = ?",
+            (profile_id,),
+        )
+        await db.commit()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Only generated {len(photos)} photos, need at least 5 for training",
+        )
+
+    # Save training photos to gallery
+    for photo in photos:
+        await db.execute(
+            """INSERT INTO profile_gallery (profile_id, image_url, content_type, prompt, model_key, is_reference, metadata)
+               VALUES (?, ?, 'lora_training', ?, 'flux2_realism', 1, ?)""",
+            (
+                profile_id,
+                photo["url"],
+                photo.get("caption", ""),
+                json.dumps({"type": photo["type"], "purpose": "lora_training"}),
+            ),
+        )
+
+    # Save training photos as reference images
+    ref_urls = [p["url"] for p in photos[:4]]
+    await db.execute(
+        "UPDATE ai_profiles SET reference_images = ?, updated_at = datetime('now') WHERE id = ?",
+        (json.dumps(ref_urls), profile_id),
+    )
+    await db.commit()
+
+    # Step 2: Start LoRA training
+    await db.execute(
+        "UPDATE ai_profiles SET lora_training_status = 'training', updated_at = datetime('now') WHERE id = ?",
+        (profile_id,),
+    )
+    await db.commit()
+
+    training_result = await start_lora_training(
+        profile_id=profile_id,
+        trigger_word=trigger_word,
+        photos=photos,
+        steps=req.steps,
+    )
+
+    if not training_result.get("success"):
+        await db.execute(
+            "UPDATE ai_profiles SET lora_training_status = 'failed', updated_at = datetime('now') WHERE id = ?",
+            (profile_id,),
+        )
+        await db.commit()
+        raise HTTPException(status_code=500, detail=training_result.get("error", "Training failed"))
+
+    # Save training record to lora_models table
+    request_id = training_result.get("request_id", "")
+    await db.execute(
+        """INSERT INTO lora_models (profile_id, trigger_word, training_status, training_steps,
+           training_images_count, training_cost, training_started_at, fal_request_id, metadata)
+           VALUES (?, ?, 'training', ?, ?, ?, datetime('now'), ?, ?)""",
+        (
+            profile_id,
+            trigger_word,
+            req.steps,
+            len(photos),
+            LORA_TRAINING_CONFIG["cost_per_training"],
+            request_id,
+            json.dumps({"zip_url": training_result.get("zip_url")}),
+        ),
+    )
+    await db.commit()
+
+    return {
+        "success": True,
+        "profile_id": profile_id,
+        "trigger_word": trigger_word,
+        "request_id": request_id,
+        "training_photos": len(photos),
+        "steps": req.steps,
+        "estimated_cost": LORA_TRAINING_CONFIG["cost_per_training"],
+        "status": "training",
+        "message": f"LoRA training started. {len(photos)} photos uploaded. Training will take 5-15 minutes.",
+    }
+
+
+@router.get("/{profile_id}/lora-status")
+async def get_lora_status(
+    profile_id: int,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Check LoRA training status and update DB when complete."""
+    cursor = await db.execute("SELECT * FROM ai_profiles WHERE id = ?", (profile_id,))
+    row = await cursor.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    profile = _parse_profile(row)
+    lora_status = profile.get("lora_training_status", "not_trained")
+
+    # Get latest lora_models record
+    cursor_lora = await db.execute(
+        "SELECT * FROM lora_models WHERE profile_id = ? ORDER BY id DESC LIMIT 1",
+        (profile_id,),
+    )
+    lora_row = await cursor_lora.fetchone()
+    lora_record = dict(lora_row) if lora_row else None
+
+    # If training in progress, poll fal.ai for status
+    if lora_status == "training" and lora_record:
+        request_id = lora_record.get("fal_request_id", "")
+        if request_id:
+            fal_status = await check_training_status(request_id)
+            fal_state = fal_status.get("status", "")
+
+            if fal_state == "completed":
+                lora_url = fal_status.get("lora_url", "")
+                lora_weights_url = fal_status.get("lora_weights_url", "")
+                config_url = fal_status.get("config_url", "")
+
+                # Update ai_profiles
+                await db.execute(
+                    """UPDATE ai_profiles SET
+                       lora_model_url = ?, lora_training_status = 'trained',
+                       lora_trained_at = datetime('now'), updated_at = datetime('now')
+                       WHERE id = ?""",
+                    (lora_weights_url or lora_url, profile_id),
+                )
+
+                # Update lora_models
+                await db.execute(
+                    """UPDATE lora_models SET
+                       lora_url = ?, lora_weights_url = ?, config_url = ?,
+                       training_status = 'completed', training_completed_at = datetime('now')
+                       WHERE id = ?""",
+                    (lora_url, lora_weights_url, config_url, lora_record["id"]),
+                )
+                await db.commit()
+
+                lora_status = "trained"
+
+            elif fal_state == "failed":
+                error = fal_status.get("error", "Unknown error")
+                await db.execute(
+                    "UPDATE ai_profiles SET lora_training_status = 'failed', updated_at = datetime('now') WHERE id = ?",
+                    (profile_id,),
+                )
+                await db.execute(
+                    "UPDATE lora_models SET training_status = 'failed', error = ? WHERE id = ?",
+                    (error, lora_record["id"]),
+                )
+                await db.commit()
+                lora_status = "failed"
+
+    return {
+        "profile_id": profile_id,
+        "lora_status": lora_status,
+        "lora_model_url": profile.get("lora_model_url"),
+        "lora_trigger_word": profile.get("lora_trigger_word"),
+        "lora_trained_at": profile.get("lora_trained_at"),
+        "training_record": lora_record,
+        "config": {
+            "training_cost": LORA_TRAINING_CONFIG["cost_per_training"],
+            "inference_cost": LORA_INFERENCE_CONFIG["cost_per_image"],
+        },
+    }
+
+
+@router.post("/{profile_id}/complete-lora-training")
+async def complete_lora_training(
+    profile_id: int,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Wait for LoRA training to finish and return result.
+
+    Blocks until training completes (up to 15 min) or fails.
+    Use /lora-status for non-blocking polling instead.
+    """
+    cursor = await db.execute("SELECT * FROM ai_profiles WHERE id = ?", (profile_id,))
+    row = await cursor.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    profile = _parse_profile(row)
+
+    if profile.get("lora_training_status") == "trained":
+        return {
+            "success": True,
+            "status": "already_trained",
+            "lora_model_url": profile.get("lora_model_url"),
+            "lora_trigger_word": profile.get("lora_trigger_word"),
+        }
+
+    # Get latest lora_models record
+    cursor_lora = await db.execute(
+        "SELECT * FROM lora_models WHERE profile_id = ? ORDER BY id DESC LIMIT 1",
+        (profile_id,),
+    )
+    lora_row = await cursor_lora.fetchone()
+    if not lora_row:
+        raise HTTPException(status_code=404, detail="No LoRA training found for this profile")
+
+    lora_record = dict(lora_row)
+    request_id = lora_record.get("fal_request_id", "")
+    if not request_id:
+        raise HTTPException(status_code=400, detail="No training request ID found")
+
+    # Wait for training to complete (blocking)
+    result = await wait_for_training(request_id, timeout_seconds=900)
+    status = result.get("status", "")
+
+    if status == "completed":
+        lora_url = result.get("lora_url", "")
+        lora_weights_url = result.get("lora_weights_url", "")
+        config_url = result.get("config_url", "")
+
+        await db.execute(
+            """UPDATE ai_profiles SET
+               lora_model_url = ?, lora_training_status = 'trained',
+               lora_trained_at = datetime('now'), updated_at = datetime('now')
+               WHERE id = ?""",
+            (lora_weights_url or lora_url, profile_id),
+        )
+        await db.execute(
+            """UPDATE lora_models SET
+               lora_url = ?, lora_weights_url = ?, config_url = ?,
+               training_status = 'completed', training_completed_at = datetime('now')
+               WHERE id = ?""",
+            (lora_url, lora_weights_url, config_url, lora_record["id"]),
+        )
+        await db.commit()
+
+        return {
+            "success": True,
+            "status": "trained",
+            "lora_model_url": lora_weights_url or lora_url,
+            "lora_trigger_word": lora_record.get("trigger_word"),
+            "config_url": config_url,
+        }
+    else:
+        error = result.get("error", "Training did not complete")
+        await db.execute(
+            "UPDATE ai_profiles SET lora_training_status = 'failed', updated_at = datetime('now') WHERE id = ?",
+            (profile_id,),
+        )
+        await db.execute(
+            "UPDATE lora_models SET training_status = 'failed', error = ? WHERE id = ?",
+            (error, lora_record["id"]),
+        )
+        await db.commit()
+
+        return {"success": False, "status": status, "error": error}

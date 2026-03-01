@@ -17,6 +17,8 @@ import {
   VoiceIdentity,
   ProfileLearningResponse,
   GeneratedPersona,
+  LoraStatus,
+  TrainLoraResult,
 } from "@/hooks/useApi";
 import {
   Plus, Sparkles, Trash2, Mic, Video, Image, Brain, Share2,
@@ -92,6 +94,12 @@ export default function AIProfilesPage() {
   const [voiceSamples, setVoiceSamples] = useState<VoiceSample[]>([]);
   const [memoryNotes, setMemoryNotes] = useState("");
 
+  // LoRA training state
+  const [loraStatus, setLoraStatus] = useState<LoraStatus | null>(null);
+  const [loraTraining, setLoraTraining] = useState(false);
+  const [loraResult, setLoraResult] = useState<TrainLoraResult | null>(null);
+  const [loraPolling, setLoraPolling] = useState(false);
+
   const [form, setForm] = useState({
     name: "",
     style: "realistic",
@@ -123,6 +131,11 @@ export default function AIProfilesPage() {
       setPipeline(await api.getProfilePipeline(p.id));
     } catch {
       setPipeline(null);
+    }
+    try {
+      setLoraStatus(await api.getLoraStatus(p.id));
+    } catch {
+      setLoraStatus(null);
     }
   };
 
@@ -317,6 +330,47 @@ export default function AIProfilesPage() {
     } catch {
       /* ok */
     }
+  };
+
+  const handleTrainLora = async () => {
+    if (!selected) return;
+    setLoraTraining(true);
+    setLoraResult(null);
+    try {
+      const res = await api.trainLora(selected.id, { num_photos: 15, steps: 1000 });
+      setLoraResult(res);
+      if (res.success) {
+        // Start polling for completion
+        setLoraPolling(true);
+        pollLoraStatus(selected.id);
+      }
+    } catch (e) {
+      setLoraResult({ success: false, error: String(e) });
+    } finally {
+      setLoraTraining(false);
+    }
+  };
+
+  const pollLoraStatus = async (profileId: number) => {
+    const poll = async () => {
+      try {
+        const status = await api.getLoraStatus(profileId);
+        setLoraStatus(status);
+        if (status.lora_status === "training" || status.lora_status === "generating_dataset" || status.lora_status === "queued") {
+          setTimeout(poll, 10000); // Poll every 10 seconds
+        } else {
+          setLoraPolling(false);
+          // Refresh profile
+          const updated = await api.getProfiles();
+          setProfiles(updated);
+          const refreshed = updated.find((p) => p.id === profileId);
+          if (refreshed) setSelected(refreshed);
+        }
+      } catch {
+        setLoraPolling(false);
+      }
+    };
+    poll();
   };
 
   const personaGrad = (p: AIProfile) => {
@@ -639,7 +693,11 @@ export default function AIProfilesPage() {
               </div>
 
               {tab === "overview" && (
-                <OverviewTab selected={selected} pipeline={pipeline} personaGrad={personaGrad} />
+                <OverviewTab
+                  selected={selected} pipeline={pipeline} personaGrad={personaGrad}
+                  loraStatus={loraStatus} loraTraining={loraTraining} loraPolling={loraPolling}
+                  loraResult={loraResult} onTrainLora={handleTrainLora}
+                />
               )}
               {tab === "generate" && (
                 <GenerateTab
@@ -704,11 +762,34 @@ export default function AIProfilesPage() {
 
 function OverviewTab({
   selected, pipeline, personaGrad,
+  loraStatus, loraTraining, loraPolling, loraResult, onTrainLora,
 }: {
   selected: AIProfile;
   pipeline: ProfilePipeline | null;
   personaGrad: (p: AIProfile) => string;
+  loraStatus: LoraStatus | null;
+  loraTraining: boolean;
+  loraPolling: boolean;
+  loraResult: TrainLoraResult | null;
+  onTrainLora: () => void;
 }) {
+  const lStatus = loraStatus?.lora_status || selected.lora_training_status || "not_trained";
+  const statusColors: Record<string, string> = {
+    not_trained: "bg-zinc-700 text-zinc-300",
+    generating_dataset: "bg-yellow-500/20 text-yellow-400",
+    training: "bg-blue-500/20 text-blue-400",
+    trained: "bg-green-500/20 text-green-400",
+    failed: "bg-red-500/20 text-red-400",
+  };
+  const statusLabels: Record<string, string> = {
+    not_trained: "Не обучена",
+    generating_dataset: "Генерация датасета...",
+    training: "Обучение LoRA...",
+    trained: "LoRA обучена",
+    failed: "Ошибка обучения",
+    queued: "В очереди...",
+  };
+
   return (
     <div className="space-y-4">
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
@@ -744,6 +825,80 @@ function OverviewTab({
             </div>
           ))}
         </div>
+      </div>
+
+      {/* LoRA Face Identity Section */}
+      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
+        <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
+          <User className="h-5 w-5 text-pink-400" /> LoRA — Фиксация лица
+        </h3>
+        <div className="flex items-center gap-4 mb-4">
+          <span className={`px-3 py-1 rounded-full text-xs font-medium ${statusColors[lStatus] || statusColors.not_trained}`}>
+            {statusLabels[lStatus] || lStatus}
+          </span>
+          {lStatus === "trained" && selected.lora_trigger_word && (
+            <span className="text-xs text-zinc-400">
+              Trigger: <code className="text-pink-400 bg-zinc-800 px-1.5 py-0.5 rounded">{selected.lora_trigger_word}</code>
+            </span>
+          )}
+          {lStatus === "trained" && selected.lora_trained_at && (
+            <span className="text-xs text-zinc-500">Обучена: {new Date(selected.lora_trained_at).toLocaleDateString()}</span>
+          )}
+        </div>
+
+        {lStatus === "not_trained" || lStatus === "failed" ? (
+          <div className="space-y-3">
+            <p className="text-sm text-zinc-400">
+              LoRA обучает модель на 15 фото девушки, после чего все генерации будут с одним и тем же лицом.
+              Стоимость: ~$2 за обучение, ~$0.05 за фото после.
+            </p>
+            <button
+              onClick={onTrainLora}
+              disabled={loraTraining}
+              className="flex items-center gap-2 bg-pink-600 hover:bg-pink-700 disabled:opacity-50 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+            >
+              {loraTraining ? (
+                <><Loader2 className="h-4 w-4 animate-spin" /> Генерация датасета...</>
+              ) : (
+                <><Sparkles className="h-4 w-4" /> Обучить LoRA (~$2, 5-15 мин)</>
+              )}
+            </button>
+            {lStatus === "failed" && loraResult?.error && (
+              <p className="text-xs text-red-400">Ошибка: {loraResult.error}</p>
+            )}
+          </div>
+        ) : lStatus === "training" || lStatus === "generating_dataset" || lStatus === "queued" ? (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <Loader2 className="h-4 w-4 animate-spin text-blue-400" />
+              <span className="text-sm text-blue-400">
+                {lStatus === "generating_dataset" ? "Генерация 15 фото для датасета..." :
+                 lStatus === "queued" ? "В очереди на обучение..." :
+                 "Обучение LoRA модели... (5-15 мин)"}
+              </span>
+            </div>
+            {loraResult?.training_photos && (
+              <p className="text-xs text-zinc-500">{loraResult.training_photos} фото загружено, {loraResult.steps} шагов обучения</p>
+            )}
+            {loraPolling && <p className="text-xs text-zinc-600">Автоматическая проверка каждые 10 сек...</p>}
+          </div>
+        ) : lStatus === "trained" ? (
+          <div className="space-y-2">
+            <p className="text-sm text-green-400 font-medium">
+              LoRA обучена! Все фото теперь генерируются с фиксированным лицом.
+            </p>
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div className="bg-zinc-800 rounded-lg p-3">
+                <div className="text-zinc-400">Стоимость обучения</div>
+                <div className="text-lg font-bold text-green-400">$2.00</div>
+              </div>
+              <div className="bg-zinc-800 rounded-lg p-3">
+                <div className="text-zinc-400">Стоимость за фото</div>
+                <div className="text-lg font-bold text-green-400">$0.05</div>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {pipeline?.voice_persona && (
@@ -802,11 +957,15 @@ function OverviewTab({
 /* ========== GENERATE TAB ========== */
 
 const PHOTO_CONTENT_TYPES = [
+  { id: "portrait", label: "Портрет" },
   { id: "gaming_reaction", label: "Игровая реакция" },
-  { id: "stream_preview", label: "Превью стрима" },
-  { id: "social_selfie", label: "Селфи для соцсетей" },
-  { id: "intimate_lingerie", label: "Нижнее бельё" },
-  { id: "professional_portrait", label: "Портрет (проф.)" },
+  { id: "gaming_chill", label: "Гейминг расслабон" },
+  { id: "instagram_lifestyle", label: "Instagram лайфстайл" },
+  { id: "instagram_glam", label: "Instagram глэм" },
+  { id: "selfie", label: "Селфи" },
+  { id: "intimate_cozy", label: "Уютное домашнее" },
+  { id: "full_body", label: "В полный рост" },
+  { id: "outdoor", label: "На улице" },
   { id: "custom", label: "Свой промт" },
 ];
 
