@@ -295,25 +295,43 @@ PACING_PRESETS = {
 
 
 async def _get_fresh_trend_recommendations() -> dict:
-    """Fetch fresh trend data by triggering real-time scraping.
+    """Fetch fresh trend data via Trend Learning Engine (3-layer system).
 
-    Forces cache refresh if data is stale (>10min).
-    Returns design recommendations dict.
+    Layer 1: Real-time data (Twitch GQL clips + YouTube trending)
+    Layer 2: Historical analysis (trend velocity, momentum)
+    Layer 3: Own performance learning (what worked for US)
+
+    Falls back to basic scraper if learning engine fails.
     """
+    # PRIMARY: Trend Learning Engine (combines all 3 layers)
+    try:
+        from app.services.trend_learning_engine import get_smart_trend_recommendations
+        recs = await get_smart_trend_recommendations()
+        if recs and recs.get("preferred_style"):
+            logger.info(
+                "Trend Learning Engine: style=%s, confidence=%.0f%%, sources=%s",
+                recs["preferred_style"],
+                recs.get("confidence", 0) * 100,
+                recs.get("data_sources_used", []),
+            )
+            return recs
+    except Exception as e:
+        logger.warning("Trend Learning Engine failed, falling back: %s", e)
+
+    # FALLBACK: Basic trend analyzer
     from app.services.trend_analyzer import (
         analyze_current_trends,
         get_platform_design_hints,
         _cache_get,
     )
 
-    # Check if we have fresh combined insights
     cache = _cache_get("combined_insights")
     cache_age = 99999
     if cache and cache.get("_cached_at"):
         cache_age = time.time() - cache["_cached_at"]
 
     if cache_age > 600:  # >10 min — refresh
-        logger.info("Trend cache stale (%ds), refreshing...", int(cache_age))
+        logger.info("Trend cache stale (%ds), refreshing via basic analyzer...", int(cache_age))
         try:
             fresh = await analyze_current_trends()
             if fresh and fresh.get("recommendations"):
@@ -322,7 +340,6 @@ async def _get_fresh_trend_recommendations() -> dict:
         except Exception as e:
             logger.warning("Trend refresh failed: %s", e)
 
-    # Use existing cached data or known patterns
     hints = get_platform_design_hints("tiktok")
     return hints
 
@@ -1117,6 +1134,38 @@ async def generate_smart_reel(
         "steps": [],
         "data_sources": {},
     }
+
+    # ─── Step 0: MANDATORY SAFETY GATE ──────────────────────────
+    # Pipeline REFUSES to run without fresh data from verified sources
+    logger.info("Step 0: Running mandatory safety gate...")
+    try:
+        from app.services.trend_learning_engine import trend_safety_gate
+        safety = await trend_safety_gate()
+        pipeline_log["steps"].append({
+            "step": 0,
+            "name": "Safety Gate",
+            "description_human": (
+                f"Предохранитель: {'ПРОЙДЕН' if safety['can_proceed'] else 'ЗАБЛОКИРОВАН'} — "
+                f"{safety['reason']}"
+            ),
+            "safety_checks": safety["checks"],
+        })
+        if not safety["can_proceed"]:
+            logger.error("SAFETY GATE BLOCKED pipeline: %s", safety["reason"])
+            return {
+                "success": False,
+                "error": f"Safety gate blocked: {safety['reason']}",
+                "safety_checks": safety["checks"],
+                "pipeline_log": pipeline_log,
+            }
+        logger.info("Safety gate PASSED: %s", safety["reason"])
+    except Exception as e:
+        logger.warning("Safety gate check failed (proceeding with caution): %s", e)
+        pipeline_log["steps"].append({
+            "step": 0,
+            "name": "Safety Gate",
+            "description_human": f"Предохранитель: ошибка проверки ({e}), продолжаем с осторожностью",
+        })
 
     # ─── Step 1: Get fresh trend recommendations ────────────────
     logger.info("Step 1: Fetching trend recommendations...")

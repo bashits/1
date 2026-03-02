@@ -248,6 +248,93 @@ async def quality_check_reel(filename: str):
     return await check_reel_quality(str(file_path))
 
 
+@router.get("/trend-learning/status")
+async def trend_learning_status():
+    """
+    Full status of the Trend Learning Engine.
+
+    Shows:
+    - Historical snapshots collected
+    - Prediction confidence and rising/falling trends
+    - Own performance insights (what works for US)
+    - Safety gate state
+    """
+    from app.services.trend_learning_engine import get_learning_status
+    return get_learning_status()
+
+
+@router.get("/trend-learning/forecast")
+async def trend_forecast():
+    """
+    Get current trend forecast (prediction based on history + real-time + own data).
+
+    Returns recommended style, rising/falling formats, confidence level.
+    This is what the pipeline uses to decide HOW to make the reel.
+    """
+    from app.services.trend_learning_engine import get_smart_trend_recommendations
+    return await get_smart_trend_recommendations()
+
+
+@router.post("/trend-learning/snapshot")
+async def capture_snapshot():
+    """
+    Manually trigger a trend snapshot capture.
+
+    Normally snapshots are captured automatically before each reel generation.
+    Use this to build up history faster for better predictions.
+    """
+    from app.services.trend_learning_engine import capture_trend_snapshot, store_snapshot
+    snapshot = await capture_trend_snapshot()
+    store_snapshot(snapshot)
+    return {
+        "captured": True,
+        "timestamp": snapshot.get("timestamp_human"),
+        "sources": {k: v.get("count", 0) for k, v in snapshot.get("sources", {}).items()},
+        "top_formats": snapshot.get("format_signals", {}).get("combined", {}),
+    }
+
+
+@router.get("/safety-gate")
+async def check_safety_gate():
+    """
+    MANDATORY pre-flight check. Pipeline BLOCKS without this passing.
+
+    Verifies:
+    - Twitch GQL operational (circuit breaker closed)
+    - Fresh clip data available (< 30min old)
+    - Trend analysis current
+
+    If can_proceed=False, pipeline REFUSES to generate reels.
+    """
+    from app.services.trend_learning_engine import trend_safety_gate
+    return await trend_safety_gate()
+
+
+@router.post("/trend-learning/record-performance")
+async def record_reel_performance(data: dict):
+    """
+    Record reel performance for self-learning.
+
+    Send views, likes, shares, retention after publishing.
+    System learns which formats/hooks/music work best.
+    """
+    from app.services.trend_learning_engine import record_reel_performance as record
+    return record(
+        reel_id=data.get("reel_id", "unknown"),
+        format_used=data.get("format", "highlight_react"),
+        color_grade=data.get("color_grade", "vibrant"),
+        music_style=data.get("music_style", "electronic"),
+        hook_type=data.get("hook_type", "text_hook"),
+        clip_source=data.get("clip_source", "twitch_gql"),
+        duration=data.get("duration", 0),
+        views=data.get("views", 0),
+        likes=data.get("likes", 0),
+        shares=data.get("shares", 0),
+        retention_pct=data.get("retention_pct", 0),
+        ctr_pct=data.get("ctr_pct", 0),
+    )
+
+
 @router.get("/architecture")
 async def pipeline_architecture():
     """
