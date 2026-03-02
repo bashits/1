@@ -4,12 +4,15 @@ Autonomous Pipeline API Router
 Endpoints for the full autonomous CS2 reel generation pipeline:
 - /readiness — pre-flight check (are all systems configured?)
 - /run — execute the full pipeline (Twitch → clips → moments → trends → reel)
+- /smart-reel — intelligent reel generation with all 7 improvements
 - /gates — check freshness gates status
 """
 
 from fastapi import APIRouter
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional
+import os
 
 router = APIRouter(prefix="/api/pipeline", tags=["pipeline"])
 
@@ -124,6 +127,58 @@ async def check_gates():
         "known_streamers": system.get("known_streamers_count", 0),
         "learning_status": system.get("learning_status", {}),
     }
+
+
+class SmartReelRequest(BaseModel):
+    clip_url: Optional[str] = None         # Direct clip URL (auto-discovers if empty)
+    streamer: Optional[str] = None         # Twitch streamer for clip search
+    search_query: str = "CS2 highlights ace clutch today"
+    hook_text: Optional[str] = None        # Auto-generated if empty
+    cta_text: str = "Follow for daily CS2 highlights!"
+    subtitle_text: Optional[str] = None    # Auto-generated from clip title if empty
+    platform: str = "tiktok"               # tiktok / youtube_shorts / instagram
+
+
+@router.post("/smart-reel")
+async def generate_smart_reel_endpoint(req: SmartReelRequest):
+    """
+    SMART REEL — Intelligent CS2 reel generation with 7 improvements:
+
+    1. Smart clip cutting (audio peak detection, full moment preservation)
+    2. Trend-driven processing (color, pacing, effects from real scraping)
+    3. Real-time trend refresh (YouTube RSS + yt-dlp search)
+    4. Auto-select best clip (trend-matched scoring)
+    5. Royalty-free music overlay (Pixabay, mixed with gameplay)
+    6. Dynamic word-by-word subtitles
+    7. Full pipeline logging (human-readable data source documentation)
+
+    Returns the reel file + full pipeline log documenting every data source.
+    """
+    from app.services.smart_reel_engine import generate_smart_reel
+
+    result = await generate_smart_reel(
+        clip_url=req.clip_url,
+        streamer=req.streamer,
+        search_query=req.search_query,
+        hook_text=req.hook_text,
+        cta_text=req.cta_text,
+        subtitle_text=req.subtitle_text,
+        platform=req.platform,
+    )
+
+    return result
+
+
+@router.get("/smart-reel/download/{filename}")
+async def download_smart_reel(filename: str):
+    """Download a generated smart reel file."""
+    from app.services.smart_reel_engine import CLIPS_DIR
+
+    file_path = CLIPS_DIR / "processed" / filename
+    if not file_path.exists():
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Reel file not found")
+    return FileResponse(str(file_path), media_type="video/mp4", filename=filename)
 
 
 @router.get("/architecture")
