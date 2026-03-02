@@ -23,9 +23,9 @@ import asyncio
 import json
 import logging
 import os
-import random
+import hashlib
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 logger = logging.getLogger("autonomous_pipeline")
@@ -54,40 +54,98 @@ class FreshnessGate:
                 "remedy": "Check Twitch API credentials or wait for CS2 streams to go live.",
             }
 
-        # Check if data is from real scraping (not fallback known patterns)
+        # Check if data is from real sources (no static fallback allowed)
         sources = set(s.get("source", "unknown") for s in twitch_streams)
-        real_sources = {"twitch_api", "twitch_tracker", "twitch_tracker_scrape"}
+        real_sources = {"twitch_api", "twitchtracker", "twitchtracker_scrape", "twitch_tracker", "twitch_tracker_scrape"}
         has_real_data = bool(sources & real_sources)
 
         if not has_real_data:
-            # Allow known_cs2_streamers fallback ONLY if it has viewer data
-            # that looks current (not all zeros)
-            total_viewers = sum(s.get("viewers", 0) for s in twitch_streams)
-            if total_viewers == 0:
-                return {
-                    "passed": False,
-                    "gate": "twitch_freshness",
-                    "error": "Twitch data is from static fallback (known patterns), not live scraping.",
-                    "sources_found": list(sources),
-                    "remedy": "Set TWITCH_CLIENT_ID + TWITCH_CLIENT_SECRET env vars for live API access.",
-                }
-
-        # Check minimum live streams
-        if len(twitch_streams) < FreshnessGate.MIN_LIVE_STREAMS:
             return {
                 "passed": False,
-                "gate": "twitch_min_streams",
-                "error": f"Only {len(twitch_streams)} CS2 streams found, need at least {FreshnessGate.MIN_LIVE_STREAMS}.",
-                "remedy": "Wait for more CS2 streamers to go live on Twitch.",
+                "gate": "twitch_freshness",
+                "error": "Twitch data is not from live API/scraping sources (static fallback detected).",
+                "sources_found": list(sources),
+                "remedy": "Set TWITCH_CLIENT_ID + TWITCH_CLIENT_SECRET or fix TwitchTracker scraping.",
             }
+
+        # Visible freshness timestamp must exist
+        fetched_at_values = [s.get("fetched_at") for s in twitch_streams if s.get("fetched_at")]
+        if not fetched_at_values:
+            return {
+                "passed": False,
+                "gate": "twitch_timestamp_missing",
+                "error": "Twitch streams missing fetched_at timestamp - freshness is not visible.",
+                "remedy": "Ensure scrape_twitch_cs2_streams() attaches fetched_at to each stream.",
+            }
+
+        newest_fetched_at = None
+        newest_dt = None
+        for fetched_at in fetched_at_values:
+            try:
+                dt = datetime.fromisoformat(str(fetched_at))
+                if dt.tzinfo is not None:
+                    dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+                if newest_dt is None or dt > newest_dt:
+                    newest_dt = dt
+                    newest_fetched_at = str(fetched_at)
+            except (ValueError, TypeError):
+                continue
+
+        if newest_dt is None:
+            return {
+                "passed": False,
+                "gate": "twitch_timestamp_invalid",
+                "error": "Twitch streams have invalid fetched_at timestamps.",
+                "remedy": "Ensure fetched_at is ISO format.",
+            }
+
+        age_seconds = (datetime.utcnow() - newest_dt).total_seconds()
+        if age_seconds > FreshnessGate.MAX_TWITCH_AGE_SECONDS:
+            return {
+                "passed": False,
+                "gate": "twitch_freshness",
+                "error": f"Twitch stream data is {int(age_seconds)}s old (max: {FreshnessGate.MAX_TWITCH_AGE_SECONDS}s).",
+                "fetched_at": newest_fetched_at,
+                "remedy": "Re-scrape Twitch streams or clear cache.",
+            }
+
+        live_streams = [s for s in twitch_streams if s.get("is_live")]
+        if len(live_streams) < FreshnessGate.MIN_LIVE_STREAMS:
+            return {
+                "passed": False,
+                "gate": "twitch_min_live_streams",
+                "error": f"Only {len(live_streams)} live CS2 streams found, need at least {FreshnessGate.MIN_LIVE_STREAMS}.",
+                "remedy": "Wait for CS2 streamers to go live on Twitch.",
+            }
+
+        total_viewers = 0
+        for s in live_streams:
+            try:
+                total_viewers += int(s.get("viewers") or 0)
+            except (ValueError, TypeError):
+                continue
+
+        # If viewer counts are missing/unknown (0), we can't pick top streams reliably.
+        if total_viewers <= 0:
+            return {
+                "passed": False,
+                "gate": "twitch_viewers_missing",
+                "error": "Viewer counts are missing/unknown - cannot proceed without visible current stats.",
+                "sources_found": list(sources),
+                "remedy": "Use Twitch API (best) or improve TwitchTracker viewer parsing.",
+            }
+
+        # Sort for reporting
+        live_sorted = sorted(live_streams, key=lambda s: int(s.get("viewers") or 0), reverse=True)
 
         return {
             "passed": True,
             "gate": "twitch_data",
-            "streams_count": len(twitch_streams),
+            "streams_count": len(live_streams),
             "sources": list(sources),
-            "total_viewers": sum(s.get("viewers", 0) for s in twitch_streams),
-            "top_streamer": twitch_streams[0].get("name", "Unknown"),
+            "total_viewers": total_viewers,
+            "top_streamer": live_sorted[0].get("name", "Unknown"),
+            "fetched_at": newest_fetched_at,
         }
 
     @staticmethod
@@ -124,6 +182,24 @@ class FreshnessGate:
         data_type = recs.get("data_type", "unknown")
         meta = trend_data.get("meta", {})
         total_data_points = meta.get("total_data_points", 0)
+
+        # Must have SOME real datapoints, otherwise this is just defaults.
+        if not total_data_points:
+            return {
+                "passed": False,
+                "gate": "trend_empty",
+                "error": "Trend analysis has 0 data points - cannot proceed without fresh stats.",
+                "remedy": "Ensure Twitch/YouTube scraping returns real items.",
+            }
+
+        twitch_source = meta.get("twitch_source", "none")
+        if twitch_source in ("known_db", "none", "unknown"):
+            return {
+                "passed": False,
+                "gate": "trend_twitch_source",
+                "error": f"Trend analysis is based on non-live Twitch source: {twitch_source}.",
+                "remedy": "Configure TWITCH_CLIENT_ID + TWITCH_CLIENT_SECRET or fix Twitch scraping.",
+            }
 
         # Check freshness of scraped_at timestamp
         scraped_at_str = meta.get("scraped_at", "")
@@ -490,7 +566,14 @@ def _generate_hook_from_trends(
             f"POV: {broadcaster_name.upper()} IN YOUR GAME",
         ]
 
-    return random.choice(pool)
+    # Deterministic selection (no randomness). Use a stable hash so the same
+    # clip title consistently produces the same hook.
+    if not pool:
+        return clip_title[:60] if clip_title else "CS2 HIGHLIGHT"
+    key = f"{moment_type}|{broadcaster_name}|{clip_title}".encode("utf-8", errors="ignore")
+    digest = hashlib.md5(key).hexdigest()
+    idx = int(digest[:8], 16) % len(pool)
+    return pool[idx]
 
 
 # ═══════════════════════════════════════════════════════════════════════

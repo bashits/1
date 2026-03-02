@@ -13,7 +13,6 @@ import json
 import os
 import re
 import time
-import random
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -258,7 +257,7 @@ async def _scrape_twitch_tracker_cs2() -> list[dict]:
                             if cleaned.isdigit() and int(cleaned) > 10:
                                 viewer_text = cleaned
                                 break
-                        viewers = int(viewer_text) if viewer_text else random.randint(500, 15000)
+                        viewers = int(viewer_text) if viewer_text else 0
                         if name and len(name) > 1:
                             streams.append({
                                 "name": name,
@@ -277,7 +276,7 @@ async def _scrape_twitch_tracker_cs2() -> list[dict]:
                     if name and len(name) > 2:
                         streams.append({
                             "name": name,
-                            "viewers": random.randint(500, 15000),
+                            "viewers": 0,  # Unknown — scraped without viewer count
                             "title": "CS2 Stream",
                             "language": "en",
                             "source": "twitchtracker",
@@ -291,19 +290,22 @@ async def _scrape_twitch_tracker_cs2() -> list[dict]:
 
 
 def _get_known_cs2_streamers() -> list[dict]:
-    """Fallback: return known CS2 streamers database."""
-    logger.info("Using known CS2 streamers database (fallback)")
+    """Fallback: return known CS2 streamers database.
+    
+    WARNING: This is STATIC data — viewer counts are historical averages,
+    not live. The source is marked as 'known_db' so freshness gates can
+    detect and reject this data when strict mode is enabled.
+    """
+    logger.info("Using known CS2 streamers database (fallback — NOT live data)")
     streamers = []
     for s in _KNOWN_CS2_STREAMERS:
-        viewers = s["viewers"] + random.randint(-2000, 2000)
-        viewers = max(100, viewers)
         streamers.append({
             "name": s["name"],
-            "viewers": viewers,
+            "viewers": s["viewers"],  # Static historical average, NOT live
             "title": s["title"],
             "language": s["language"],
             "source": "known_db",
-            "is_live": random.random() > 0.3,
+            "is_live": False,  # We don't know — mark as not live
         })
     return streamers
 
@@ -315,7 +317,17 @@ async def scrape_twitch_cs2_streams(
     cache = _cache_get("twitch_streams")
     if cache and cache.get("streams"):
         logger.info(f"Twitch: serving {len(cache['streams'])} streams from cache")
-        return cache["streams"]
+        streams = cache["streams"]
+        # Preserve a visible freshness timestamp on each record.
+        cached_at = cache.get("_cached_at")
+        fetched_at = (
+            datetime.utcfromtimestamp(cached_at).isoformat()
+            if cached_at
+            else datetime.utcnow().isoformat()
+        )
+        for s in streams:
+            s.setdefault("fetched_at", fetched_at)
+        return streams
     if not twitch_client_id:
         twitch_client_id = os.environ.get("TWITCH_CLIENT_ID", "")
     if not twitch_secret:
@@ -328,6 +340,9 @@ async def scrape_twitch_cs2_streams(
     if not streams:
         streams = _get_known_cs2_streamers()
     if streams:
+        fetched_at = datetime.utcnow().isoformat()
+        for s in streams:
+            s["fetched_at"] = fetched_at
         _cache_set("twitch_streams", {"streams": streams})
     return streams
 
@@ -468,7 +483,8 @@ async def _scrape_youtube_search_page() -> list[dict]:
         async with httpx.AsyncClient(
             timeout=20.0, follow_redirects=True
         ) as client:
-            query = random.choice(queries)
+            # Deterministic query selection (avoid randomness in pipeline)
+            query = queries[0]
             search_url = (
                 "https://www.youtube.com/results?search_query="
                 + query.replace(" ", "+")
@@ -547,36 +563,14 @@ async def _scrape_youtube_search_page() -> list[dict]:
 
 
 def _get_known_youtube_patterns() -> list[dict]:
-    """Fallback: generate YouTube data from known patterns."""
-    logger.info("Using known YouTube CS2 patterns (fallback)")
-    titles = [
-        "CS2 ACE with AWP - s1mple style",
-        "INSANE 1v5 Clutch on Mirage",
-        "CS2 Funny Moments #42",
-        "This PLAY made the crowd GO CRAZY",
-        "How to RANK UP in CS2 (2025 Guide)",
-        "CS2 Pro Settings That Will Change Your Game",
-        "The CRAZIEST Eco Round Ever in CS2",
-        "m0NESY Shows Why He is THE BEST",
-        "CS2 Update: New Map is INSANE",
-        "Top 10 CS2 Plays of the Week",
-        "POV: You are Playing Against a CS2 Pro",
-        "CS2 AWP Highlights That Will Blow Your Mind",
-    ]
-    videos = []
-    for i, title in enumerate(titles):
-        channel = random.choice(_KNOWN_YT_CHANNELS)
-        videos.append({
-            "title": title,
-            "channel": channel["channel"],
-            "video_id": f"known_{i}",
-            "views": random.randint(50000, 2000000),
-            "source": "known_patterns",
-            "published_at": (
-                datetime.utcnow() - timedelta(days=random.randint(0, 7))
-            ).isoformat(),
-        })
-    return videos
+    """Fallback (DISABLED): previously returned FAKE YouTube data.
+
+    This project must not generate or use simulated trend data.
+    If no real YouTube data can be scraped, return an empty list and let
+    freshness gates / callers decide whether to proceed.
+    """
+    logger.info("No real YouTube data available (fallback disabled)")
+    return []
 
 
 async def scrape_youtube_cs2_trending(youtube_api_key: str = "") -> list[dict]:
@@ -598,8 +592,9 @@ async def scrape_youtube_cs2_trending(youtube_api_key: str = "") -> list[dict]:
         for sv in search_videos:
             if sv.get("video_id") not in existing_ids:
                 videos.append(sv)
+    # No fake fallback - if we can't scrape real YouTube data, return empty.
     if not videos:
-        videos = _get_known_youtube_patterns()
+        videos = []
     if videos:
         _cache_set("youtube_trending", {"videos": videos})
     return videos

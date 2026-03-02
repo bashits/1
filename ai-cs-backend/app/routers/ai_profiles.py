@@ -926,7 +926,8 @@ async def generate_video(
                 detail=f"Invalid duration_seconds={requested_duration}. Allowed: {sorted(VIDEO_DURATION_OPTIONS)}",
             )
 
-    voice_duration = float(voice_result.get("duration") or 3.0)
+    raw_voice_duration = voice_result.get("duration")
+    voice_duration = float(raw_voice_duration) if raw_voice_duration is not None else 3.0
 
     # Enforce upper bound to keep costs predictable
     if requested_duration is not None and voice_duration > requested_duration + 0.2:

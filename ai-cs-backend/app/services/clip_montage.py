@@ -1880,6 +1880,11 @@ async def generate_girl_animated_overlay(
         f"[v_out]"
     )
 
+    # Encode with yuv420p — the circle alpha mask from geq is baked into the
+    # RGB pixels (black corners). The actual transparency is re-applied via a
+    # fresh geq alpha mask in assemble_montage() during the overlay compositing
+    # step (see line ~2422). This is intentional: H.264/yuv420p is fast and
+    # compatible; alpha is handled at composite time, not in the intermediate file.
     cmd = [
         "ffmpeg", "-y",
         "-i", str(img_path),
@@ -1888,7 +1893,7 @@ async def generate_girl_animated_overlay(
         "-map", "[v_out]", "-map", "1:a",
         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
         "-c:a", "aac", "-b:a", "128k",
-        "-pix_fmt", "yuv420p",  # Alpha is re-applied via geq in assemble_montage
+        "-pix_fmt", "yuv420p",
         "-t", str(d),
         "-movflags", "+faststart",
         output_path,
