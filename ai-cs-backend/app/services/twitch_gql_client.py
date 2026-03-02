@@ -23,6 +23,7 @@ No silent fallbacks. No stale data passed as fresh.
 import asyncio
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -424,6 +425,11 @@ async def get_streamer_clips(
     Returns same format as get_cs2_top_clips().
     Raises TwitchGQLError if service down.
     """
+    # Sanitize login to prevent GQL injection (Twitch usernames: alphanumeric + underscores)
+    login = re.sub(r'[^a-zA-Z0-9_]', '', login)
+    if not login:
+        return {"clips": [], "total": 0, "streamer": login, "error": "Invalid login"}
+
     cache_key = f"user_clips_{login}_{period}_{limit}"
 
     if use_cache:
