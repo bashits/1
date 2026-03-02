@@ -527,6 +527,20 @@ async def generate_tts(
 
     file_size = output_path.stat().st_size if output_path.exists() else 0
 
+    # Get actual audio duration via ffprobe (same approach as voice_engine.py)
+    duration = None
+    try:
+        import subprocess
+        probe = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(output_path)],
+            capture_output=True, text=True, timeout=10,
+        )
+        if probe.returncode == 0 and probe.stdout.strip():
+            duration = round(float(probe.stdout.strip()), 2)
+    except Exception:
+        pass
+
     return {
         "success": True,
         "file_path": str(output_path),
@@ -534,6 +548,7 @@ async def generate_tts(
         "voice": voice,
         "text": text,
         "file_size_bytes": file_size,
+        "duration": duration,
         "cost": 0.0,
         "engine": "edge-tts",
     }

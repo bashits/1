@@ -1888,7 +1888,7 @@ async def generate_girl_animated_overlay(
         "-map", "[v_out]", "-map", "1:a",
         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
         "-c:a", "aac", "-b:a", "128k",
-        "-pix_fmt", "yuv420p",
+        "-pix_fmt", "yuv420p",  # Alpha is re-applied via geq in assemble_montage
         "-t", str(d),
         "-movflags", "+faststart",
         output_path,
