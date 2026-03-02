@@ -350,8 +350,8 @@ def _score_clip_as_moment(clip: dict) -> dict:
 
     # 4. Moment type base score
     from app.services.moment_detector import MOMENT_SCORING
-    type_scoring = MOMENT_SCORING.get(moment_type, {"base_min": 0.4, "base_max": 0.7, "viral_mult": 1.0})
-    type_score = (type_scoring["base_min"] + type_scoring["base_max"]) / 2 * 0.25
+    type_scoring = MOMENT_SCORING.get(moment_type, {"base": 0.55, "viral_mult": 1.0})
+    type_score = type_scoring["base"] * 0.25
 
     # Composite
     composite = view_score + duration_score + broadcaster_score + type_score
