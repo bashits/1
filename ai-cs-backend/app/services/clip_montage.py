@@ -40,13 +40,18 @@ APIs needed:
 
 import asyncio
 import json
+import logging
 import os
 import random
+import re
 import shutil
+import subprocess
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger("clip_montage")
 
 # Ensure system paths are on PATH
 for _bin_dir in ["/usr/bin", "/usr/local/bin"]:
@@ -110,6 +115,140 @@ def _find_font() -> str:
 
 FONT_PATH = _find_font()
 HAS_FONT = bool(FONT_PATH and os.path.exists(FONT_PATH))
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# SECTION 0.5: ADAPTIVE VIDEO ANALYSIS + SMART COLOR ENGINE
+# ═══════════════════════════════════════════════════════════════════════
+
+async def _analyze_source_brightness(file_path: str, start_time: float = 0.0) -> dict:
+    """Analyze source video brightness using FFmpeg signalstats.
+
+    Returns average luma (YAVG, 0-255). Used to avoid making already-bright
+    clips even brighter (the "too bright" bug).
+    """
+    _ensure_ffmpeg()
+
+    # Analyze a short window starting at start_time (default: beginning)
+    cmd = [
+        "ffmpeg", "-y",
+        "-ss", str(max(0.0, start_time)),
+        "-t", "5",
+        "-i", file_path,
+        "-an",
+        "-vf", "signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=-",
+        "-f", "null", "-",
+    ]
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+        output = stdout.decode(errors="replace")
+
+        yavg_values: list[float] = []
+        for line in output.split("\n"):
+            if "lavfi.signalstats.YAVG" not in line:
+                continue
+            m = re.search(r"lavfi\.signalstats\.YAVG=(\d+(?:\.\d+)?)", line)
+            if not m:
+                continue
+            try:
+                yavg_values.append(float(m.group(1)))
+            except ValueError:
+                pass
+
+        if yavg_values:
+            avg = sum(yavg_values) / len(yavg_values)
+            return {
+                "avg_brightness": round(avg, 1),
+                "is_bright": avg > 140,
+                "is_dark": avg < 80,
+                "is_normal": 80 <= avg <= 140,
+                "samples": len(yavg_values),
+            }
+
+    except Exception as e:
+        logger.warning(f"Source brightness analysis failed: {e}")
+
+    return {"avg_brightness": 128, "is_bright": False, "is_dark": False, "is_normal": True, "samples": 0}
+
+
+# Extended color grade presets — adaptive based on source brightness
+COLOR_GRADE_PRESETS = {
+    "cinematic": {
+        "bright_src": "eq=contrast=1.12:brightness=-0.06:saturation=0.85,curves=preset=cross_process",
+        "normal_src": "eq=contrast=1.15:brightness=-0.02:saturation=0.88,curves=preset=cross_process",
+        "dark_src": "eq=contrast=1.1:brightness=0.02:saturation=0.9,curves=preset=cross_process",
+        "vignette": 0.3,
+    },
+    "vibrant": {
+        "bright_src": "eq=contrast=1.08:saturation=1.25:brightness=-0.02",
+        "normal_src": "eq=contrast=1.1:saturation=1.3:brightness=0.01",
+        "dark_src": "eq=contrast=1.12:saturation=1.35:brightness=0.04",
+        "vignette": 0.2,
+    },
+    "dark": {
+        "bright_src": "eq=contrast=1.3:brightness=-0.1:saturation=0.7,curves=preset=increase_contrast",
+        "normal_src": "eq=contrast=1.25:brightness=-0.08:saturation=0.72,curves=preset=increase_contrast",
+        "dark_src": "eq=contrast=1.15:brightness=-0.04:saturation=0.75,curves=preset=increase_contrast",
+        "vignette": 0.45,
+    },
+    "high_contrast": {
+        "bright_src": "eq=contrast=1.35:brightness=-0.06:saturation=1.05,curves=preset=increase_contrast",
+        "normal_src": "eq=contrast=1.4:brightness=-0.02:saturation=1.1,curves=preset=increase_contrast",
+        "dark_src": "eq=contrast=1.3:brightness=0.02:saturation=1.1,curves=preset=increase_contrast",
+        "vignette": 0.3,
+    },
+    "warm_teal": {
+        "bright_src": "eq=contrast=1.1:saturation=1.12:brightness=-0.03,colorbalance=rs=-0.08:gs=0.02:bs=0.1:rm=0.05:bm=-0.05",
+        "normal_src": "eq=contrast=1.1:saturation=1.15:brightness=-0.01,colorbalance=rs=-0.08:gs=0.02:bs=0.1:rm=0.05:bm=-0.05",
+        "dark_src": "eq=contrast=1.08:saturation=1.18:brightness=0.02,colorbalance=rs=-0.06:gs=0.02:bs=0.08:rm=0.04:bm=-0.04",
+        "vignette": 0.25,
+    },
+    "neutral": {
+        "bright_src": "eq=contrast=1.05:saturation=1.0:brightness=-0.02",
+        "normal_src": "eq=contrast=1.05:saturation=1.0:brightness=0.0",
+        "dark_src": "eq=contrast=1.05:saturation=1.0:brightness=0.02",
+        "vignette": 0.0,
+    },
+    "saturated": {
+        "bright_src": "eq=contrast=1.08:saturation=1.4:brightness=-0.03",
+        "normal_src": "eq=contrast=1.1:saturation=1.45:brightness=0.01",
+        "dark_src": "eq=contrast=1.1:saturation=1.5:brightness=0.04",
+        "vignette": 0.15,
+    },
+    "cool_blue": {
+        "bright_src": "eq=contrast=1.12:saturation=0.95:brightness=-0.04,colorbalance=rs=-0.1:bs=0.12:rm=-0.05:bm=0.08",
+        "normal_src": "eq=contrast=1.12:saturation=0.95:brightness=-0.02,colorbalance=rs=-0.1:bs=0.12:rm=-0.05:bm=0.08",
+        "dark_src": "eq=contrast=1.08:saturation=0.98:brightness=0.01,colorbalance=rs=-0.08:bs=0.1:rm=-0.04:bm=0.06",
+        "vignette": 0.3,
+    },
+}
+
+
+def _get_adaptive_color_filters(color_grade: str, brightness_info: dict) -> list[str]:
+    preset = COLOR_GRADE_PRESETS.get(color_grade) or COLOR_GRADE_PRESETS["cinematic"]
+
+    if brightness_info.get("is_bright"):
+        base = preset["bright_src"]
+    elif brightness_info.get("is_dark"):
+        base = preset["dark_src"]
+    else:
+        base = preset["normal_src"]
+
+    filters = [f.strip() for f in base.split(",") if f.strip()]
+
+    vignette_strength = float(preset.get("vignette", 0.0) or 0.0)
+    if vignette_strength > 0:
+        # Lower angle => stronger vignette. Keep safe range to avoid over-dark edges.
+        angle = max(0.35, 0.6 - (vignette_strength * 0.5))
+        filters.append(f"vignette=PI/{angle:.2f}")
+
+    return filters
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2256,13 +2395,13 @@ async def process_game_clip_vertical(
 
     vf.append("fps=30")
 
-    # Color grading
-    if color_grade == "cinematic":
-        vf.append("eq=contrast=1.2:brightness=-0.03:saturation=0.85")
-    elif color_grade == "vibrant":
-        vf.append("eq=contrast=1.1:saturation=1.4:brightness=0.02")
-    elif color_grade == "dark":
-        vf.append("eq=contrast=1.3:brightness=-0.08:saturation=0.7")
+    # Color grading (adaptive to source brightness to avoid over-exposure)
+    brightness_info = await _analyze_source_brightness(source_path, start_time=start_time)
+    vf.extend(_get_adaptive_color_filters(color_grade, brightness_info))
+
+    # Quality enhancement (mild denoise + sharpen; tuned for CS2 compression)
+    vf.append("atadenoise=0a=0.02:0b=0.04:1a=0.02:1b=0.04:2a=0.02:2b=0.04:s=9")
+    vf.append("unsharp=lx=5:ly=5:la=0.8:cx=5:cy=5:ca=0.0")
 
     # Zoom effect at action point
     if zoom_at is not None:
@@ -2274,35 +2413,86 @@ async def process_game_clip_vertical(
                 f":d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps=30"
             )
 
-    # Hook text (only if font available)
+    # Hook text — animated fade-in + shadow glow (only if font available)
     if hook_text and HAS_FONT:
         escaped = _escape_text(hook_text)
+        hook_fade_end = min(0.6, hook_duration * 0.15)
+        # Shadow layer (offset glow)
         vf.append(
             f"drawtext=fontfile='{FONT_PATH}':text='{escaped}'"
-            f":fontsize=56:fontcolor=white:borderw=3:bordercolor=black"
+            f":fontsize=58:fontcolor=black@0.55:borderw=0"
+            f":shadowx=4:shadowy=4:shadowcolor=black@0.6"
+            f":x=(w-tw)/2+2:y=142:enable='between(t,0.2,{hook_duration})'"
+            f":alpha='if(lt(t-0.2,{hook_fade_end}),(t-0.2)/{hook_fade_end},1)'"
+        )
+        # Main text layer
+        vf.append(
+            f"drawtext=fontfile='{FONT_PATH}':text='{escaped}'"
+            f":fontsize=58:fontcolor=white:borderw=3:bordercolor=black@0.9"
+            f":shadowx=2:shadowy=2:shadowcolor=black@0.4"
             f":x=(w-tw)/2:y=140:enable='between(t,0.2,{hook_duration})'"
-            f":box=1:boxcolor=black@0.5:boxborderw=14"
+            f":alpha='if(lt(t-0.2,{hook_fade_end}),(t-0.2)/{hook_fade_end},1)'"
+            f":box=1:boxcolor=black@0.45:boxborderw=16"
         )
 
-    # CTA text (only if font available)
+    # CTA text — fade-in from bottom with glow
     if cta_text and HAS_FONT:
         escaped = _escape_text(cta_text)
         cta_start = max(0, actual_duration - cta_start_before_end)
+        cta_fade = 0.4
+        # Shadow
         vf.append(
             f"drawtext=fontfile='{FONT_PATH}':text='{escaped}'"
-            f":fontsize=42:fontcolor=white:borderw=2:bordercolor=black"
+            f":fontsize=44:fontcolor=black@0.5"
+            f":shadowx=3:shadowy=3:shadowcolor=black@0.5"
+            f":x=(w-tw)/2+2:y=h-178:enable='between(t,{cta_start},{actual_duration})'"
+            f":alpha='if(lt(t-{cta_start},{cta_fade}),(t-{cta_start})/{cta_fade},1)'"
+        )
+        # Main
+        vf.append(
+            f"drawtext=fontfile='{FONT_PATH}':text='{escaped}'"
+            f":fontsize=44:fontcolor=white:borderw=2:bordercolor=black@0.85"
+            f":shadowx=1:shadowy=1:shadowcolor=black@0.3"
             f":x=(w-tw)/2:y=h-180:enable='between(t,{cta_start},{actual_duration})'"
-            f":box=1:boxcolor=black@0.6:boxborderw=12"
+            f":alpha='if(lt(t-{cta_start},{cta_fade}),(t-{cta_start})/{cta_fade},1)'"
+            f":box=1:boxcolor=black@0.5:boxborderw=14"
         )
 
-    # Subtitle text (only if font available)
+    # Subtitle text — word-by-word phrase animation (only if font available)
     if subtitle_text and HAS_FONT:
-        escaped = _escape_text(subtitle_text)
-        vf.append(
-            f"drawtext=fontfile='{FONT_PATH}':text='{escaped}'"
-            f":fontsize=46:fontcolor=yellow:borderw=3:bordercolor=black"
-            f":x=(w-tw)/2:y=h-320"
-        )
+        words = subtitle_text.split()
+        words_per_phrase = 3 if len(words) > 8 else (2 if len(words) > 4 else max(1, len(words)))
+        phrases = [" ".join(words[i:i + words_per_phrase]) for i in range(0, len(words), words_per_phrase)]
+        if phrases:
+            sub_dur = actual_duration * 0.8  # subtitle zone = 80% of clip
+            sub_start = actual_duration * 0.1
+            phrase_dur = sub_dur / len(phrases)
+            phrase_dur = max(phrase_dur, 0.8)
+            for pi, phrase in enumerate(phrases):
+                ps = sub_start + pi * phrase_dur
+                pe = ps + phrase_dur - 0.02
+                pe = min(pe, sub_start + sub_dur)
+                if ps >= sub_start + sub_dur:
+                    break
+                esc = _escape_text(phrase)
+                # Shadow
+                vf.append(
+                    f"drawtext=fontfile='{FONT_PATH}':text='{esc}'"
+                    f":fontsize=48:fontcolor=black@0.6"
+                    f":shadowx=3:shadowy=3:shadowcolor=black@0.5"
+                    f":x=(w-tw)/2+2:y=h-318:enable='between(t,{ps:.3f},{pe:.3f})'"
+                )
+                # Main
+                vf.append(
+                    f"drawtext=fontfile='{FONT_PATH}':text='{esc}'"
+                    f":fontsize=48:fontcolor=yellow:borderw=3:bordercolor=black@0.9"
+                    f":shadowx=1:shadowy=1:shadowcolor=black@0.3"
+                    f":x=(w-tw)/2:y=h-320:enable='between(t,{ps:.3f},{pe:.3f})'"
+                )
+
+    # Cinematic intro/outro: fast fade-in + fade-out black
+    vf.append(f"fade=t=in:st=0:d=0.3:color=black")
+    vf.append(f"fade=t=out:st={max(0, actual_duration - 0.4)}:d=0.4:color=black")
 
     vf_str = ",".join(vf)
 
@@ -2316,8 +2506,8 @@ async def process_game_clip_vertical(
         "-i", source_path,
         "-t", str(actual_duration),
         "-vf", vf_str, "-af", af,
-        "-c:v", "libx264", "-preset", "fast", "-crf", "25",
-        "-c:a", "aac", "-b:a", "128k",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+        "-c:a", "aac", "-b:a", "160k",
         "-threads", "1",
         "-movflags", "+faststart", "-pix_fmt", "yuv420p",
         output_path,
@@ -2488,6 +2678,7 @@ async def assemble_montage(
     mix_count = 1
 
     # Music track — per-phase volume automation if available
+    # Plus: sidechain ducking against gameplay audio (more human mix)
     if music_idx is not None:
         if phase_volumes and len(phase_volumes) >= 2:
             music_vol_expr_parts = []
@@ -2508,7 +2699,12 @@ async def assemble_montage(
                 f"atrim=0:{total_duration},asetpts=PTS-STARTPTS,"
                 f"aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[music_a]"
             )
-        mix_inputs.append("[music_a]")
+
+        # Duck music when gameplay is loud so gunshots/caster scream cut through
+        audio_filters.append(
+            "[music_a][game_a]sidechaincompress=threshold=0.08:ratio=10:attack=15:release=250:makeup=1[music_ducked]"
+        )
+        mix_inputs.append("[music_ducked]")
         mix_count += 1
 
     # Girl audio
@@ -2537,9 +2733,10 @@ async def assemble_montage(
     # Mix all audio tracks
     if mix_count > 1:
         mix_str = "".join(mix_inputs)
-        audio_filters.append(f"{mix_str}amix=inputs={mix_count}:duration=first:dropout_transition=2[out_a]")
+        audio_filters.append(f"{mix_str}amix=inputs={mix_count}:duration=first:dropout_transition=2[mix_a]")
+        audio_filters.append("[mix_a]loudnorm=I=-16:TP=-1.5:LRA=11[out_a]")
     else:
-        audio_filters.append("[game_a]acopy[out_a]")
+        audio_filters.append("[game_a]loudnorm=I=-16:TP=-1.5:LRA=11[out_a]")
 
     # Combine filter graph
     filter_complex = ";".join(video_filters + audio_filters)
@@ -2659,9 +2856,14 @@ async def create_montage(
     if color_grade == "cinematic" and trend_hints.get("recommended_color_grade"):
         trend_color = trend_hints["recommended_color_grade"]
         color_grade_map = {
-            "vibrant": "vibrant", "high_contrast": "cinematic",
-            "dark_moody": "cinematic", "warm": "warm",
-            "cool": "cool", "retro": "retro",
+            "vibrant": "vibrant",
+            "high_contrast": "high_contrast",
+            "dark_moody": "dark",
+            "warm": "warm_teal",
+            "cool": "cool_blue",
+            "retro": "saturated",
+            "neutral": "neutral",
+            "saturated": "saturated",
         }
         color_grade = color_grade_map.get(trend_color, color_grade)
 
