@@ -485,6 +485,20 @@ async def generate_voice_elevenlabs(
                 char_count = len(text)
                 cost = round(char_count * 0.00003, 4)
 
+                # Compute actual audio duration via ffprobe
+                duration = None
+                try:
+                    import subprocess
+                    probe = subprocess.run(
+                        ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+                         "-of", "default=noprint_wrappers=1:nokey=1", str(output_path)],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    if probe.returncode == 0 and probe.stdout.strip():
+                        duration = round(float(probe.stdout.strip()), 2)
+                except Exception:
+                    pass
+
                 return {
                     "success": True,
                     "file_path": str(output_path),
@@ -494,6 +508,7 @@ async def generate_voice_elevenlabs(
                     "text": text,
                     "char_count": char_count,
                     "file_size_bytes": file_size,
+                    "duration": duration,
                     "cost": cost,
                     "engine": "elevenlabs_v3",
                     "settings": settings,
