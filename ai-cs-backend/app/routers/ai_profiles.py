@@ -789,7 +789,7 @@ async def generate_photo(
 
         await db.execute(
             "UPDATE ai_profiles SET total_photos = total_photos + ?, total_cost = total_cost + ?, updated_at = datetime('now') WHERE id = ?",
-            (len(images) or req.num_images, total_cost, profile_id),
+            (len(images), total_cost, profile_id),
         )
         await db.commit()
 
