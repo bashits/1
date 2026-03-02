@@ -233,7 +233,7 @@ async def get_pricing():
 @router.get("/video-cost-estimate")
 async def get_video_cost_estimate(
     duration_seconds: float = Query(default=3.0, ge=1.0, le=60.0),
-    lipsync_model_key: str = "kling_avatar",
+    lipsync_model_key: str = "omnihuman",
     include_i2v: bool = False,
     i2v_model_key: str = "kling",
     voice_engine: str = "elevenlabs",

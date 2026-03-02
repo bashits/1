@@ -454,6 +454,7 @@ async def generate_voice_elevenlabs(
     settings["stability"] = max(0.0, min(1.0, settings.get("stability", 0.30)))
     settings["similarity_boost"] = max(0.0, min(1.0, settings.get("similarity_boost", 0.78)))
     settings["style"] = max(0.0, min(1.0, settings.get("style", 0.72)))
+    settings["speed"] = max(0.5, min(2.0, settings.get("speed", 1.0)))
 
     headers = {
         "xi-api-key": api_key,
@@ -468,6 +469,7 @@ async def generate_voice_elevenlabs(
             "similarity_boost": settings["similarity_boost"],
             "style": settings["style"],
             "use_speaker_boost": settings.get("use_speaker_boost", True),
+            "speed": settings.get("speed", 1.0),
         },
     }
 
