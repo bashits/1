@@ -1873,18 +1873,13 @@ async def generate_girl_animated_overlay(
         f"crop=w={size}:h={size}"
         f":x='({pad_size}-{size})/2*(1+sin(2*PI*t/1.5))'"
         f":y='({pad_size}-{size})/2*(1+sin(2*PI*t/2.0))',"
-        # Crop to circle with alpha
-        f"format=rgba,"
-        f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':"
-        f"a='if(lte(({half}-X)*({half}-X)+({half}-Y)*({half}-Y),{half}*{half}),255,0)'"
-        f"[v_out]"
+        # Keep square here; circle mask is applied during final montage compositing
+        f"format=yuv420p[v_out]"
     )
 
-    # Encode with yuv420p — the circle alpha mask from geq is baked into the
-    # RGB pixels (black corners). The actual transparency is re-applied via a
-    # fresh geq alpha mask in assemble_montage() during the overlay compositing
-    # step (see line ~2422). This is intentional: H.264/yuv420p is fast and
-    # compatible; alpha is handled at composite time, not in the intermediate file.
+    # Encode MP4 (no alpha). If the montage wants a circle PiP, assemble_montage()
+    # applies a fresh geq alpha mask during compositing (see circle branch around
+    # line ~2435).
     cmd = [
         "ffmpeg", "-y",
         "-i", str(img_path),
