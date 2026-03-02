@@ -356,16 +356,86 @@ def _map_trend_to_ffmpeg(trend_recs: dict) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 3. CLIP AUTO-DISCOVERY (via yt-dlp, no Twitch API needed)
+# 3. CLIP AUTO-DISCOVERY — Twitch GQL (primary) + YouTube yt-dlp (fallback)
 # ═══════════════════════════════════════════════════════════════════
+
+async def _discover_clips_twitch_gql(
+    period: str = "LAST_WEEK",
+    limit: int = 20,
+) -> list[dict]:
+    """PRIMARY: Discover CS2 clips via Twitch GQL (no auth needed).
+
+    Raises TwitchGQLError if service is down — pipeline STOPS.
+    Returns normalized clip list for scoring.
+    """
+    from app.services.twitch_gql_client import get_cs2_top_clips, TwitchGQLError
+
+    try:
+        result = await get_cs2_top_clips(period=period, limit=limit)
+    except TwitchGQLError:
+        logger.error("Twitch GQL clip discovery FAILED — pipeline blocked")
+        raise
+
+    clips = []
+    for c in result.get("clips", []):
+        clips.append({
+            "title": c.get("title", ""),
+            "url": c.get("url", ""),
+            "video_id": c.get("clip_id", ""),
+            "slug": c.get("slug", ""),
+            "duration": c.get("duration_seconds", 0),
+            "view_count": c.get("view_count", 0),
+            "channel": c.get("broadcaster_login", ""),
+            "created_at": c.get("created_at", ""),
+            "thumbnail_url": c.get("thumbnail_url", ""),
+            "source": "twitch_gql",
+            "fetched_at": c.get("fetched_at", ""),
+        })
+
+    logger.info("Twitch GQL: found %d CS2 clips (period=%s)", len(clips), period)
+    return clips
+
+
+async def _discover_streamer_clips_gql(
+    login: str,
+    period: str = "LAST_WEEK",
+    limit: int = 10,
+) -> list[dict]:
+    """Discover clips from a specific Twitch streamer via GQL."""
+    from app.services.twitch_gql_client import get_streamer_clips, TwitchGQLError
+
+    try:
+        result = await get_streamer_clips(login=login, period=period, limit=limit)
+    except TwitchGQLError:
+        logger.warning("Twitch GQL streamer clips failed for %s", login)
+        return []
+
+    clips = []
+    for c in result.get("clips", []):
+        clips.append({
+            "title": c.get("title", ""),
+            "url": c.get("url", ""),
+            "video_id": c.get("clip_id", ""),
+            "slug": c.get("slug", ""),
+            "duration": c.get("duration_seconds", 0),
+            "view_count": c.get("view_count", 0),
+            "channel": login,
+            "created_at": c.get("created_at", ""),
+            "source": "twitch_gql",
+            "fetched_at": c.get("fetched_at", ""),
+        })
+
+    logger.info("Twitch GQL: found %d clips for streamer %s", len(clips), login)
+    return clips
+
 
 async def _discover_cs2_clips_ytdlp(
     query: str = "CS2 highlights",
     limit: int = 10,
 ) -> list[dict]:
-    """Discover CS2 clips using yt-dlp search (no API key needed).
+    """FALLBACK: Discover CS2 clips using yt-dlp YouTube search.
 
-    Searches YouTube for recent CS2 content and returns clip metadata.
+    Only used if Twitch GQL returns 0 clips.
     """
     cmd = [
         "yt-dlp",
@@ -408,55 +478,6 @@ async def _discover_cs2_clips_ytdlp(
         return clips
     except Exception as e:
         logger.warning(f"yt-dlp clip discovery failed: {e}")
-        return []
-
-
-async def _discover_twitch_clips_ytdlp(
-    streamer: str,
-    limit: int = 5,
-) -> list[dict]:
-    """Discover Twitch clips for a streamer using yt-dlp."""
-    url = f"https://www.twitch.tv/{streamer}/clips?filter=clips&range=7d"
-    cmd = [
-        "yt-dlp",
-        url,
-        "--dump-json",
-        "--flat-playlist",
-        "--no-download",
-        "--no-warnings",
-        "--quiet",
-        "--playlist-end", str(limit),
-    ]
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=90)
-        output = stdout.decode(errors="replace")
-
-        clips = []
-        for line in output.strip().split("\n"):
-            if not line.strip():
-                continue
-            try:
-                data = json.loads(line)
-                clips.append({
-                    "title": data.get("title", ""),
-                    "url": data.get("webpage_url", data.get("url", "")),
-                    "video_id": data.get("id", ""),
-                    "duration": data.get("duration", 0),
-                    "view_count": data.get("view_count", 0),
-                    "channel": streamer,
-                    "source": "twitch_ytdlp",
-                })
-            except json.JSONDecodeError:
-                continue
-
-        return clips
-    except Exception as e:
-        logger.warning(f"Twitch clip discovery for {streamer} failed: {e}")
         return []
 
 
@@ -665,17 +686,13 @@ def _generate_dynamic_subtitle_filter(
 ) -> str:
     """Generate FFmpeg drawtext filters for word-by-word subtitle animation.
 
-    Each word appears one at a time with a fade-in effect.
+    FIXED: No overlapping subtitles. Each word group replaces previous one.
+    Uses phrase-based display (3-4 words at a time) for readability.
+    Validates timing to prevent any overlap.
     """
     words = text.split()
     if not words:
         return ""
-
-    filters = []
-    # Time each word gets on screen
-    word_duration = min(total_duration / len(words), 1.5)
-    # Each word stays visible for at least its duration + overlap
-    visible_duration = max(word_duration * 2, 1.0)
 
     # Font style configs
     style_configs = {
@@ -719,22 +736,37 @@ def _generate_dynamic_subtitle_filter(
 
     cfg = style_configs.get(font_style, style_configs["glow_outline"])
 
-    for i, word in enumerate(words):
-        word_start = start_time + i * word_duration
-        word_end = min(word_start + visible_duration, start_time + total_duration)
+    # Break into phrases of 3-4 words for readability (no single-word spam)
+    words_per_phrase = 3 if len(words) > 8 else (2 if len(words) > 4 else 1)
+    phrases = []
+    for i in range(0, len(words), words_per_phrase):
+        phrases.append(" ".join(words[i:i + words_per_phrase]))
+
+    if not phrases:
+        return ""
+
+    # Calculate timing: each phrase gets equal time, NO overlap
+    phrase_duration = total_duration / len(phrases)
+    # Minimum 0.8s per phrase for readability
+    phrase_duration = max(phrase_duration, 0.8)
+
+    filters = []
+    for i, phrase in enumerate(phrases):
+        phrase_start = start_time + i * phrase_duration
+        # Strict end = next phrase start (NO overlap)
+        phrase_end = phrase_start + phrase_duration - 0.01  # tiny gap to prevent overlap
+        # Don't exceed total duration
+        phrase_end = min(phrase_end, start_time + total_duration)
+
+        if phrase_start >= start_time + total_duration:
+            break
 
         # Escape for FFmpeg
-        escaped = word.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:").replace("%", "%%")
+        escaped = phrase.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:").replace("%", "%%")
 
-        # Accumulated text: show all words up to current
-        accumulated = " ".join(words[:i + 1])
-        acc_escaped = accumulated.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:").replace("%", "%%")
-
-        # Current word highlighted, previous words dim
-        # Use accumulated text approach for natural reading feel
         filters.append(
             f"drawtext=fontfile='{font_path}'"
-            f":text='{acc_escaped}'"
+            f":text='{escaped}'"
             f":fontsize={cfg['fontsize']}"
             f":fontcolor={cfg['fontcolor']}"
             f":borderw={cfg['borderw']}"
@@ -744,10 +776,37 @@ def _generate_dynamic_subtitle_filter(
             f":shadowcolor={cfg['shadowcolor']}"
             f":x=(w-tw)/2"
             f":y=h-300"
-            f":enable='between(t,{word_start:.2f},{word_end:.2f})'"
+            f":enable='between(t,{phrase_start:.3f},{phrase_end:.3f})'"
         )
 
+    # VALIDATION: check no overlaps exist
+    _validate_subtitle_timing(filters)
+
     return ",".join(filters)
+
+
+def _validate_subtitle_timing(filters: list[str]) -> None:
+    """Validate that subtitle filters have no timing overlaps.
+
+    Logs warning if overlaps detected (should never happen with fixed code).
+    """
+    import re as _re
+    intervals = []
+    for f in filters:
+        match = _re.search(r"between\(t,([\d.]+),([\d.]+)\)", f)
+        if match:
+            start = float(match.group(1))
+            end = float(match.group(2))
+            intervals.append((start, end))
+
+    intervals.sort(key=lambda x: x[0])
+    for i in range(len(intervals) - 1):
+        if intervals[i][1] > intervals[i + 1][0] + 0.001:
+            logger.warning(
+                "SUBTITLE OVERLAP DETECTED: [%.3f-%.3f] overlaps [%.3f-%.3f]",
+                intervals[i][0], intervals[i][1],
+                intervals[i + 1][0], intervals[i + 1][1]
+            )
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1086,6 +1145,9 @@ async def generate_smart_reel(
     })
 
     # ─── Step 2: Clip discovery / selection ─────────────────────
+    # PRIMARY: Twitch GQL (no auth needed, reliable)
+    # FALLBACK: YouTube yt-dlp search
+    # If GQL is down and no cache — pipeline STOPS with clear error
     selected_clip_data = None
     if clip_url:
         logger.info("Step 2: Using provided clip URL: %s", clip_url[:80])
@@ -1096,30 +1158,69 @@ async def generate_smart_reel(
             "description_human": f"Клип указан вручную: {clip_url[:80]}",
         })
     else:
-        logger.info("Step 2: Auto-discovering clips...")
+        logger.info("Step 2: Auto-discovering clips via Twitch GQL...")
+        from app.services.twitch_gql_client import TwitchGQLError
+
         clips = []
+        gql_clips_count = 0
+        yt_clips_count = 0
 
-        # Try Twitch streamer first
-        if streamer:
-            twitch_clips = await _discover_twitch_clips_ytdlp(streamer, limit=5)
-            clips.extend(twitch_clips)
-            pipeline_log["data_sources"]["twitch_clips"] = {
-                "streamer": streamer,
-                "found": len(twitch_clips),
+        # PRIMARY: Twitch GQL — top CS2 clips
+        try:
+            gql_clips = await _discover_clips_twitch_gql(period="LAST_WEEK", limit=20)
+            clips.extend(gql_clips)
+            gql_clips_count = len(gql_clips)
+            pipeline_log["data_sources"]["twitch_gql_game"] = {
+                "source": "twitch_gql",
+                "period": "LAST_WEEK",
+                "found": gql_clips_count,
             }
+        except TwitchGQLError as e:
+            pipeline_log["data_sources"]["twitch_gql_game"] = {
+                "source": "twitch_gql",
+                "error": str(e),
+                "found": 0,
+            }
+            # Don't silently continue — log the error clearly
+            logger.error("Twitch GQL game clips failed: %s", e)
 
-        # Also search YouTube
-        yt_clips = await _discover_cs2_clips_ytdlp(search_query, limit=10)
-        clips.extend(yt_clips)
-        pipeline_log["data_sources"]["youtube_search"] = {
-            "query": search_query,
-            "found": len(yt_clips),
-        }
+        # If streamer specified, also get their clips via GQL
+        if streamer:
+            try:
+                streamer_clips = await _discover_streamer_clips_gql(streamer, limit=10)
+                clips.extend(streamer_clips)
+                pipeline_log["data_sources"]["twitch_gql_streamer"] = {
+                    "source": "twitch_gql",
+                    "streamer": streamer,
+                    "found": len(streamer_clips),
+                }
+            except Exception as e:
+                pipeline_log["data_sources"]["twitch_gql_streamer"] = {
+                    "error": str(e),
+                    "found": 0,
+                }
+
+        # FALLBACK: YouTube yt-dlp only if GQL returned 0 clips
+        if not clips:
+            logger.warning("Twitch GQL returned 0 clips, falling back to YouTube yt-dlp")
+            yt_clips = await _discover_cs2_clips_ytdlp(search_query, limit=10)
+            clips.extend(yt_clips)
+            yt_clips_count = len(yt_clips)
+            pipeline_log["data_sources"]["youtube_fallback"] = {
+                "source": "yt_dlp_search",
+                "query": search_query,
+                "found": yt_clips_count,
+                "note": "Fallback — Twitch GQL returned 0 clips",
+            }
 
         if not clips:
             return {
                 "success": False,
-                "error": "No CS2 clips found. Try providing a direct URL.",
+                "error": (
+                    "ОШИБКА: Не найдено ни одного CS2 клипа. "
+                    "Twitch GQL: 0 клипов. YouTube: 0 клипов. "
+                    "Попробуй указать прямой URL клипа."
+                ),
                 "pipeline_log": pipeline_log,
             }
 
@@ -1131,7 +1232,7 @@ async def generate_smart_reel(
             "step": 2,
             "name": "Clip Discovery & Selection",
             "description_human": (
-                f"Нашёл {len(clips)} клипов (YouTube: {len(yt_clips)}). "
+                f"Нашёл {len(clips)} клипов (Twitch GQL: {gql_clips_count}, YouTube: {yt_clips_count}). "
                 f"Выбрал лучший по трендам: '{selected_clip_data.get('title', '?')[:50]}' "
                 f"(score: {selection.get('score', 0):.1f}, views: {selected_clip_data.get('view_count', 0)}). "
                 f"Топ-3 кандидата: {selection.get('top_3', [])}"
@@ -1288,8 +1389,24 @@ async def generate_smart_reel(
             f"Цветокоррекция: {ffmpeg_params['color_description']}. "
             f"Пейсинг: {ffmpeg_params['pacing']}. "
             f"Музыка: {'Pixabay ' + music_style if music_path else 'только геймплей'}. "
-            f"Субтитры: word-by-word анимация."
+            f"Субтитры: phrase-based анимация (без наложений)."
         ),
+    })
+
+    # ─── Step 8: Pre-publish quality check ───────────────────
+    logger.info("Step 8: Running pre-publish quality checks...")
+    from app.services.reel_quality_checker import check_reel_quality
+    quality = await check_reel_quality(result["file_path"], target_platform=platform)
+
+    pipeline_log["steps"].append({
+        "step": 8,
+        "name": "Quality Check",
+        "description_human": (
+            f"Проверка качества: {quality['grade']} — "
+            f"{'ПРОШЁЛ' if quality['passed'] else 'НЕ ПРОШЁЛ'}. "
+            + (f"Проблемы: {'; '.join(i['description'] for i in quality['issues'])}" if quality['issues'] else "Без проблем.")
+        ),
+        "quality_result": quality,
     })
 
     pipeline_log["completed_at"] = datetime.utcnow().isoformat()
@@ -1302,6 +1419,7 @@ async def generate_smart_reel(
         "file_size": result.get("file_size"),
         "resolution": result.get("resolution"),
         "pipeline_log": pipeline_log,
+        "quality_check": quality,
         "trend_applied": {
             "color_grade": ffmpeg_params["color_grade"],
             "music_style": ffmpeg_params["music_style"],

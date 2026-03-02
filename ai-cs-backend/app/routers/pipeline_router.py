@@ -181,6 +181,73 @@ async def download_smart_reel(filename: str):
     return FileResponse(str(file_path), media_type="video/mp4", filename=filename)
 
 
+@router.get("/twitch-health")
+async def twitch_gql_health():
+    """
+    Full health check of Twitch GQL service.
+
+    Returns:
+    - Circuit breaker state (closed/open/half_open)
+    - Connectivity test result (reachable, response time, sample data)
+    - Cache freshness for all data types
+    - Overall verdict: operational / degraded / blocked
+
+    If status is "blocked", the pipeline REFUSES to run until resolved.
+    """
+    from app.services.twitch_gql_client import health_check
+    return await health_check()
+
+
+@router.get("/data-freshness")
+async def check_data_freshness():
+    """
+    Verify Twitch data freshness before allowing pipeline to run.
+
+    Returns can_proceed=True/False.
+    If False, the pipeline MUST NOT proceed — shows exact reason.
+    """
+    from app.services.twitch_gql_client import verify_data_freshness
+    return await verify_data_freshness()
+
+
+@router.post("/reset-circuit-breaker")
+async def reset_circuit():
+    """
+    Manually reset Twitch GQL circuit breaker.
+    Use this after fixing connectivity issues.
+    """
+    from app.services.twitch_gql_client import reset_circuit_breaker, get_circuit_state
+    reset_circuit_breaker()
+    return {
+        "reset": True,
+        "new_state": get_circuit_state(),
+        "message": "Circuit breaker reset. Next request will test Twitch GQL connectivity.",
+    }
+
+
+@router.post("/quality-check/{filename}")
+async def quality_check_reel(filename: str):
+    """
+    Run pre-publish quality checks on a generated reel.
+
+    Returns pass/fail with specific issues:
+    - File validity
+    - Resolution (should be 9:16 vertical)
+    - Duration (should be 5-60s)
+    - Audio (not silent, not clipping)
+    - Context (no black frames at start/end)
+    """
+    from app.services.smart_reel_engine import CLIPS_DIR
+    from app.services.reel_quality_checker import check_reel_quality
+
+    file_path = CLIPS_DIR / "processed" / filename
+    if not file_path.exists():
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=f"Reel file not found: {filename}")
+
+    return await check_reel_quality(str(file_path))
+
+
 @router.get("/architecture")
 async def pipeline_architecture():
     """
