@@ -61,10 +61,11 @@ async def _detect_audio_peaks(file_path: str) -> list[dict]:
     crowd reactions, caster screams) which indicate action peaks.
     Returns list of {time_sec, volume_db} sorted by volume.
     """
-    # Get per-second volume levels using FFmpeg
+    # Use per-second RMS analysis via FFmpeg astats
+    # reset=44100 means reset stats every 1 second (at 44.1kHz)
     cmd = [
         "ffmpeg", "-i", file_path,
-        "-af", "astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level:file=-",
+        "-af", "astats=metadata=1:reset=44100,ametadata=print:key=lavfi.astats.Overall.RMS_level:file=-",
         "-f", "null", "-"
     ]
     try:
@@ -73,27 +74,54 @@ async def _detect_audio_peaks(file_path: str) -> list[dict]:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
         output = stdout.decode(errors="replace")
 
-        # Parse per-frame RMS levels
+        # Parse output: lines alternate between "frame:N pts_time:X" and "lavfi.astats..."
         peaks = []
-        current_time = 0.0
+        current_pts_time = 0.0
         for line in output.split("\n"):
-            if "lavfi.astats.Overall.RMS_level" in line:
-                parts = line.strip().split("=")
+            line = line.strip()
+            if "pts_time:" in line:
+                match = re.search(r"pts_time:(\S+)", line)
+                if match:
+                    try:
+                        current_pts_time = float(match.group(1))
+                    except ValueError:
+                        pass
+            elif "lavfi.astats.Overall.RMS_level" in line:
+                parts = line.split("=")
                 if len(parts) >= 2:
                     try:
                         db = float(parts[-1])
-                        peaks.append({"time_sec": round(current_time, 2), "volume_db": db})
-                        current_time += 1.0  # ~1 second per reset
+                        if db > -100:  # Skip silence
+                            peaks.append({"time_sec": round(current_pts_time, 2), "volume_db": db})
                     except ValueError:
-                        current_time += 1.0
+                        pass
 
-        # Sort by volume (loudest first)
-        peaks.sort(key=lambda p: p["volume_db"], reverse=True)
-        return peaks
+        # Aggregate to 1-second buckets for cleaner peak detection
+        if peaks:
+            buckets: dict[int, list[float]] = {}
+            for p in peaks:
+                bucket = int(p["time_sec"])
+                if bucket not in buckets:
+                    buckets[bucket] = []
+                buckets[bucket].append(p["volume_db"])
 
+            aggregated = []
+            for sec, volumes in buckets.items():
+                avg_db = sum(volumes) / len(volumes)
+                aggregated.append({"time_sec": float(sec), "volume_db": round(avg_db, 2)})
+
+            aggregated.sort(key=lambda p: p["volume_db"], reverse=True)
+            logger.info(f"Audio peaks: found {len(aggregated)} second-buckets, loudest at {aggregated[0]['time_sec']}s ({aggregated[0]['volume_db']} dB)")
+            return aggregated
+
+        return []
+
+    except asyncio.TimeoutError:
+        logger.warning("Audio peak detection timed out")
+        return []
     except Exception as e:
         logger.warning(f"Audio peak detection failed: {e}")
         return []
@@ -535,15 +563,31 @@ MUSIC_STYLE_QUERIES = {
     "ambient": "ambient calm chill",
 }
 
-# Curated list of royalty-free music URLs (Pixabay/direct links)
-# These are pre-verified royalty-free tracks
+# Curated list of royalty-free music URLs
+# Multiple fallback URLs per style for reliability
 BUILT_IN_MUSIC = {
-    "phonk": "https://cdn.pixabay.com/audio/2024/11/29/audio_a509879ded.mp3",
-    "electronic": "https://cdn.pixabay.com/audio/2024/10/08/audio_4788c14a52.mp3",
-    "dramatic": "https://cdn.pixabay.com/audio/2024/09/10/audio_6e4e977903.mp3",
-    "epic": "https://cdn.pixabay.com/audio/2024/02/22/audio_a1e4026a6c.mp3",
-    "ambient": "https://cdn.pixabay.com/audio/2024/09/03/audio_ef57daa518.mp3",
-    "meme": "https://cdn.pixabay.com/audio/2024/03/14/audio_5e3b98efc6.mp3",
+    "phonk": [
+        "https://cdn.pixabay.com/download/audio/2022/10/25/audio_946eb6a7cc.mp3",
+        "https://cdn.pixabay.com/download/audio/2023/09/27/audio_90a4122818.mp3",
+    ],
+    "electronic": [
+        "https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3",
+        "https://cdn.pixabay.com/download/audio/2022/01/18/audio_d0c6ff1bdd.mp3",
+    ],
+    "dramatic": [
+        "https://cdn.pixabay.com/download/audio/2022/02/22/audio_d1718ab41b.mp3",
+        "https://cdn.pixabay.com/download/audio/2023/10/30/audio_669e25faa3.mp3",
+    ],
+    "epic": [
+        "https://cdn.pixabay.com/download/audio/2022/01/20/audio_d16737dc28.mp3",
+        "https://cdn.pixabay.com/download/audio/2024/02/22/audio_a1e4026a6c.mp3",
+    ],
+    "ambient": [
+        "https://cdn.pixabay.com/download/audio/2022/03/15/audio_115701bab8.mp3",
+    ],
+    "meme": [
+        "https://cdn.pixabay.com/download/audio/2021/08/04/audio_0625c1539c.mp3",
+    ],
 }
 
 
@@ -560,27 +604,52 @@ async def _download_music(style: str) -> Optional[str]:
         logger.info(f"Music cache hit: {style}")
         return str(cache_file)
 
-    url = BUILT_IN_MUSIC.get(style)
-    if not url:
-        # Try first available
-        url = BUILT_IN_MUSIC.get("electronic")
-
-    if not url:
+    urls = BUILT_IN_MUSIC.get(style, [])
+    if not urls:
+        urls = BUILT_IN_MUSIC.get("electronic", [])
+    if not urls:
         return None
 
+    # Try each URL until one works
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        for url in urls:
+            try:
+                resp = await client.get(url)
+                if resp.status_code == 200 and len(resp.content) > 10000:
+                    cache_file.write_bytes(resp.content)
+                    logger.info(f"Downloaded music: {style} ({len(resp.content)} bytes) from {url[:60]}")
+                    return str(cache_file)
+                else:
+                    logger.warning(f"Music URL returned status={resp.status_code}, trying next...")
+            except Exception as e:
+                logger.warning(f"Music URL failed ({url[:50]}): {e}, trying next...")
+
+    # Last resort: generate a simple beat using FFmpeg
+    logger.info("All music URLs failed, generating simple beat track...")
     try:
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-            resp = await client.get(url)
-            if resp.status_code == 200 and len(resp.content) > 10000:
-                cache_file.write_bytes(resp.content)
-                logger.info(f"Downloaded music: {style} ({len(resp.content)} bytes)")
-                return str(cache_file)
-            else:
-                logger.warning(f"Music download failed: status={resp.status_code}")
-                return None
+        beat_cmd = [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i",
+            "sine=frequency=80:duration=60,volume=0.3",
+            "-f", "lavfi", "-i",
+            "sine=frequency=160:duration=60,volume=0.15",
+            "-filter_complex",
+            "[0:a][1:a]amix=inputs=2:duration=first[out]",
+            "-map", "[out]",
+            "-c:a", "libmp3lame", "-b:a", "128k",
+            str(cache_file),
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *beat_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        await asyncio.wait_for(proc.communicate(), timeout=15)
+        if cache_file.exists() and cache_file.stat().st_size > 1000:
+            logger.info(f"Generated fallback beat track: {cache_file.stat().st_size} bytes")
+            return str(cache_file)
     except Exception as e:
-        logger.warning(f"Music download error: {e}")
-        return None
+        logger.warning(f"Beat generation failed: {e}")
+
+    return None
 
 
 # ═══════════════════════════════════════════════════════════════════
