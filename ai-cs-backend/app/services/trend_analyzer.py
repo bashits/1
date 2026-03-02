@@ -9,6 +9,7 @@ All data flows INTO the montage engine via get_platform_design_hints().
 Self-learning: tracks which design combos perform best and adjusts weights.
 """
 
+import asyncio
 import json
 import os
 import re
@@ -479,6 +480,105 @@ async def _scrape_youtube_rss_cs2() -> list[dict]:
     return videos
 
 
+def _extract_yt_initial_data_json(page_text: str) -> Optional[dict]:
+    """Extract the ytInitialData JSON blob from a YouTube HTML page.
+
+    YouTube embeds nested JSON objects that are unsafe to parse with regex.
+    This uses brace-balancing to extract the JSON substring.
+    """
+    markers = ["var ytInitialData = ", "ytInitialData = "]
+    start = -1
+    for marker in markers:
+        idx = page_text.find(marker)
+        if idx != -1:
+            start = idx + len(marker)
+            break
+    if start == -1:
+        return None
+
+    brace_start = page_text.find("{", start)
+    if brace_start == -1:
+        return None
+
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(brace_start, len(page_text)):
+        ch = page_text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == "\"":
+                in_str = False
+            continue
+
+        if ch == "\"":
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                blob = page_text[brace_start : i + 1]
+                try:
+                    return json.loads(blob)
+                except json.JSONDecodeError:
+                    return None
+
+    return None
+
+
+def _yt_dlp_search_sync(query: str, max_results: int = 12) -> list[dict]:
+    """Use yt-dlp's search to get real YouTube results without API keys."""
+    try:
+        from yt_dlp import YoutubeDL
+
+        opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+            "extract_flat": "in_playlist",
+        }
+        with YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(f"ytsearch{max_results}:{query}", download=False)
+
+        entries = info.get("entries") if isinstance(info, dict) else None
+        if not entries:
+            return []
+
+        videos: list[dict] = []
+        for entry in entries:
+            if not entry:
+                continue
+            title = entry.get("title", "") or ""
+            vid_id = entry.get("id", "") or ""
+            channel = (
+                entry.get("uploader")
+                or entry.get("channel")
+                or entry.get("channel_id")
+                or ""
+            )
+            if not title:
+                continue
+            videos.append(
+                {
+                    "title": title,
+                    "channel": channel,
+                    "video_id": vid_id,
+                    "published_at": "",
+                    "description": "",
+                    "views": 0,
+                    "source": "youtube_ytdlp",
+                }
+            )
+        return videos
+    except Exception as e:
+        logger.warning(f"yt-dlp YouTube search error: {e}")
+        return []
+
+
 async def _scrape_youtube_search_page() -> list[dict]:
     """Scrape YouTube search results page for CS2 trending content."""
     queries = [
@@ -503,68 +603,65 @@ async def _scrape_youtube_search_page() -> list[dict]:
             if resp.status_code != 200:
                 return []
             text = resp.text
-            pattern = r'var ytInitialData\s*=\s*(\{.*?\});\s*</script>'
-            match = re.search(pattern, text)
-            if not match:
-                pattern2 = r'ytInitialData\s*=\s*(\{.*?\});\s*'
-                match = re.search(pattern2, text)
-            if match:
-                try:
-                    yt_data = json.loads(match.group(1))
-                    contents = (
-                        yt_data.get("contents", {})
-                        .get("twoColumnSearchResultsRenderer", {})
-                        .get("primaryContents", {})
-                        .get("sectionListRenderer", {})
+            yt_data = _extract_yt_initial_data_json(text)
+            if not yt_data:
+                return []
+
+            try:
+                contents = (
+                    yt_data.get("contents", {})
+                    .get("twoColumnSearchResultsRenderer", {})
+                    .get("primaryContents", {})
+                    .get("sectionListRenderer", {})
+                    .get("contents", [])
+                )
+                for section in contents:
+                    items = (
+                        section.get("itemSectionRenderer", {})
                         .get("contents", [])
                     )
-                    for section in contents:
-                        items = (
-                            section.get("itemSectionRenderer", {})
-                            .get("contents", [])
+                    for item in items:
+                        video = item.get("videoRenderer", {})
+                        if not video:
+                            continue
+                        title_runs = video.get("title", {}).get("runs", [])
+                        title_text = (
+                            title_runs[0].get("text", "") if title_runs else ""
                         )
-                        for item in items:
-                            video = item.get("videoRenderer", {})
-                            if not video:
-                                continue
-                            title_runs = video.get("title", {}).get("runs", [])
-                            title_text = (
-                                title_runs[0].get("text", "") if title_runs else ""
-                            )
-                            channel_runs = (
-                                video.get("ownerText", {}).get("runs", [])
-                            )
-                            channel_name = (
-                                channel_runs[0].get("text", "")
-                                if channel_runs
-                                else ""
-                            )
-                            vid_id = video.get("videoId", "")
-                            view_text = (
-                                video.get("viewCountText", {})
-                                .get("simpleText", "0")
-                            )
-                            views = 0
-                            view_match = re.search(
-                                r'[\d,]+', view_text.replace(",", "")
-                            )
-                            if view_match:
-                                try:
-                                    views = int(
-                                        view_match.group().replace(",", "")
-                                    )
-                                except ValueError:
-                                    views = 0
-                            if title_text and vid_id:
-                                videos.append({
+                        channel_runs = (
+                            video.get("ownerText", {}).get("runs", [])
+                        )
+                        channel_name = (
+                            channel_runs[0].get("text", "")
+                            if channel_runs
+                            else ""
+                        )
+                        vid_id = video.get("videoId", "")
+                        view_text = (
+                            video.get("viewCountText", {})
+                            .get("simpleText", "0")
+                        )
+                        views = 0
+                        view_match = re.search(
+                            r"[\d,]+", view_text.replace(",", "")
+                        )
+                        if view_match:
+                            try:
+                                views = int(view_match.group().replace(",", ""))
+                            except ValueError:
+                                views = 0
+                        if title_text and vid_id:
+                            videos.append(
+                                {
                                     "title": title_text,
                                     "channel": channel_name,
                                     "video_id": vid_id,
                                     "views": views,
                                     "source": "youtube_search_page",
-                                })
-                except json.JSONDecodeError:
-                    logger.warning("Failed to parse ytInitialData JSON")
+                                }
+                            )
+            except Exception as e:
+                logger.debug(f"YouTube search parse error: {e}")
             logger.info(f"YouTube search: found {len(videos)} CS2 videos")
     except Exception as e:
         logger.warning(f"YouTube search scrape error: {e}")
@@ -583,7 +680,10 @@ def _get_known_youtube_patterns() -> list[dict]:
 
 
 async def scrape_youtube_cs2_trending(youtube_api_key: str = "") -> list[dict]:
-    """Main entry: YouTube CS2 trending. Fallback: API -> RSS -> Search -> known"""
+    """Main entry: YouTube CS2 trending.
+
+    Fallback order: API -> RSS -> Search page -> yt-dlp search.
+    """
     cache = _cache_get("youtube_trending")
     if cache and cache.get("videos"):
         logger.info(f"YouTube: serving {len(cache['videos'])} videos from cache")
@@ -601,6 +701,17 @@ async def scrape_youtube_cs2_trending(youtube_api_key: str = "") -> list[dict]:
         for sv in search_videos:
             if sv.get("video_id") not in existing_ids:
                 videos.append(sv)
+
+    # Stable final fallback (still real data, no API key): yt-dlp search
+    if len(videos) < 5:
+        ytdlp_videos = await asyncio.to_thread(
+            _yt_dlp_search_sync, "CS2 highlights today", 12
+        )
+        existing_ids = {v.get("video_id") for v in videos}
+        for yv in ytdlp_videos:
+            if yv.get("video_id") and yv.get("video_id") not in existing_ids:
+                videos.append(yv)
+
     # No fake fallback - if we can't scrape real YouTube data, return empty.
     if not videos:
         videos = []
