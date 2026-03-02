@@ -398,23 +398,23 @@ export default function AIProfilesPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">AI Девушки</h1>
-          <p className="text-zinc-400 text-sm mt-1">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="text-lg sm:text-2xl font-bold">AI Девушки</h1>
+          <p className="text-zinc-400 text-xs sm:text-sm mt-1">
             Управление персонажами: голос, фото, видео, соцсети, память
           </p>
         </div>
         <button
           onClick={() => setShowCreate(!showCreate)}
-          className="flex items-center gap-2 bg-pink-600 hover:bg-pink-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+          className="flex items-center gap-2 bg-pink-600 hover:bg-pink-700 active:bg-pink-800 px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-medium transition-colors shrink-0"
         >
-          <Plus className="h-4 w-4" /> Новая девушка
+          <Plus className="h-4 w-4" /><span className="hidden sm:inline">Новая девушка</span><span className="sm:hidden">Новая</span>
         </button>
       </div>
 
       {showCreate && (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 space-y-4">
+        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 sm:p-6 space-y-4">
           <div className="flex items-center justify-between">
             <h3 className="text-lg font-semibold text-pink-400">Создать AI девушку</h3>
             <div className="flex gap-2">
@@ -446,7 +446,7 @@ export default function AIProfilesPage() {
                 </p>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                 <div>
                   <label className="block text-xs text-zinc-400 mb-1">Имя (опционально)</label>
                   <input
@@ -480,7 +480,7 @@ export default function AIProfilesPage() {
                     </div>
                   </div>
                   <p className="text-xs text-zinc-400 leading-relaxed">{personaPreview.bio}</p>
-                  <div className="grid grid-cols-3 gap-2 text-[10px]">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[10px]">
                     <div className="bg-zinc-900 rounded p-2">
                       <div className="text-zinc-500 mb-1">Внешность</div>
                       <div className="text-zinc-300">{personaPreview.appearance.ethnicity}, {personaPreview.appearance.hair_color} {personaPreview.appearance.hair_style}</div>
@@ -504,7 +504,7 @@ export default function AIProfilesPage() {
                 </div>
               )}
 
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
                 <div>
                   <label className="block text-xs text-zinc-400 mb-1">Instagram</label>
                   <input
@@ -537,7 +537,7 @@ export default function AIProfilesPage() {
               <button
                 onClick={handleCreate}
                 disabled={createLoading}
-                className="flex items-center gap-2 bg-pink-600 hover:bg-pink-700 disabled:opacity-50 px-6 py-2.5 rounded-lg text-sm font-semibold transition-colors"
+                className="flex items-center gap-2 bg-pink-600 hover:bg-pink-700 active:bg-pink-800 disabled:opacity-50 px-4 sm:px-6 py-2.5 rounded-lg text-sm font-semibold transition-colors"
               >
                 {createLoading ? (
                   <><Loader2 className="h-4 w-4 animate-spin" /> Генерация уникальной девушки + фото...</>
@@ -551,7 +551,7 @@ export default function AIProfilesPage() {
             </div>
           ) : (
             <div className="space-y-4">
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
                 <div>
                   <label className="block text-xs text-zinc-400 mb-1">Имя</label>
                   <input
@@ -636,8 +636,8 @@ export default function AIProfilesPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-4 gap-6">
-        <div className="col-span-1 space-y-3">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 md:gap-6">
+        <div className="md:col-span-1 space-y-3">
           <h3 className="text-sm font-semibold text-zinc-400 uppercase tracking-wider">Профили</h3>
           {profiles.length === 0 && (
             <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 text-center text-zinc-500 text-sm">
@@ -691,21 +691,21 @@ export default function AIProfilesPage() {
           ))}
         </div>
 
-        <div className="col-span-3 space-y-4">
+        <div className="md:col-span-3 space-y-4">
           {selected ? (
             <>
-              <div className="flex gap-1 bg-zinc-900 border border-zinc-800 rounded-xl p-1">
+              <div className="flex gap-1 bg-zinc-900 border border-zinc-800 rounded-xl p-1 overflow-x-auto">
                 {TABS.map((t) => (
                   <button
                     key={t.id}
                     onClick={() => handleTabChange(t.id)}
-                    className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    className={`flex-1 flex items-center justify-center gap-1 sm:gap-2 py-2 rounded-lg text-xs sm:text-sm font-medium transition-colors min-w-0 ${
                       tab === t.id
                         ? "bg-pink-600 text-white"
-                        : "text-zinc-400 hover:text-white hover:bg-zinc-800"
+                        : "text-zinc-400 hover:text-white hover:bg-zinc-800 active:bg-zinc-800"
                     }`}
                   >
-                    <t.icon className="h-4 w-4" /> {t.label}
+                    <t.icon className="h-4 w-4 shrink-0" /> <span className="truncate">{t.label}</span>
                   </button>
                 ))}
               </div>
@@ -816,26 +816,26 @@ function OverviewTab({
 
   return (
     <div className="space-y-4">
-      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
-        <div className="flex items-center gap-4 mb-4">
-          <div className={`w-16 h-16 rounded-full bg-gradient-to-br ${personaGrad(selected)} flex items-center justify-center text-2xl font-bold`}>
+      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 sm:p-6">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4 mb-4">
+          <div className={`w-12 h-12 sm:w-16 sm:h-16 rounded-full bg-gradient-to-br ${personaGrad(selected)} flex items-center justify-center text-xl sm:text-2xl font-bold shrink-0`}>
             {selected.name[0]}
           </div>
-          <div className="flex-1">
-            <h2 className="text-xl font-bold">{selected.name}</h2>
-            <p className="text-zinc-400 text-sm">{selected.description}</p>
-            <div className="flex gap-3 mt-1 text-xs text-zinc-500">
+          <div className="flex-1 min-w-0">
+            <h2 className="text-lg sm:text-xl font-bold truncate">{selected.name}</h2>
+            <p className="text-zinc-400 text-xs sm:text-sm">{selected.description}</p>
+            <div className="flex flex-wrap gap-2 sm:gap-3 mt-1 text-xs text-zinc-500">
               {selected.instagram_handle && <span>IG: {selected.instagram_handle}</span>}
               {selected.tiktok_handle && <span>TT: {selected.tiktok_handle}</span>}
               {selected.telegram_channel && <span>TG: {selected.telegram_channel}</span>}
             </div>
           </div>
-          <div className="text-right">
-            <div className="text-2xl font-bold text-green-400">${(selected.total_cost || 0).toFixed(2)}</div>
+          <div className="text-left sm:text-right">
+            <div className="text-xl sm:text-2xl font-bold text-green-400">${(selected.total_cost || 0).toFixed(2)}</div>
             <div className="text-xs text-zinc-500">потрачено</div>
           </div>
         </div>
-        <div className="grid grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
           {[
             { label: "Видео", value: selected.total_videos || 0, icon: Video },
             { label: "Фото", value: selected.total_photos || 0, icon: Image },
@@ -852,8 +852,8 @@ function OverviewTab({
       </div>
 
       {/* LoRA Face Identity Section */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
-        <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
+      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 sm:p-6">
+        <h3 className="text-base sm:text-lg font-semibold mb-3 flex items-center gap-2">
           <User className="h-5 w-5 text-pink-400" /> LoRA — Фиксация лица
         </h3>
         <div className="flex items-center gap-4 mb-4">
@@ -934,7 +934,7 @@ function OverviewTab({
           <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
             <Volume2 className="h-5 w-5 text-violet-400" /> Голосовая персона
           </h3>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
             <div>
               <div className="text-sm font-medium text-pink-400">{pipeline.voice_persona.name}</div>
               <div className="text-xs text-zinc-400 mt-1">{pipeline.voice_persona.description}</div>

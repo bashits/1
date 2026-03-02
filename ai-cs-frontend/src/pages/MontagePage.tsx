@@ -181,30 +181,30 @@ export default function MontagePage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-xl font-bold text-white">Интеллектуальный Монтаж</h2>
-          <p className="text-sm text-zinc-400">Полный пайплайн: клип + музыка + SFX + AI девушка + финальная сборка</p>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-lg sm:text-xl font-bold text-white truncate">Интеллектуальный Монтаж</h2>
+          <p className="text-xs sm:text-sm text-zinc-400 truncate">Клип + музыка + SFX + AI девушка + сборка</p>
         </div>
-        <Badge className="bg-violet-500/20 text-violet-400 border border-violet-500/30">
+        <Badge className="bg-violet-500/20 text-violet-400 border border-violet-500/30 shrink-0">
           <Zap className="h-3 w-3 mr-1" />
-          {status?.engine || "Загрузка..."}
+          {status?.engine || "..."}
         </Badge>
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-2 flex-wrap">
+      <div className="flex gap-1.5 sm:gap-2 flex-wrap">
         {tabs.map((tab) => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+            className={`flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-medium transition-colors ${
               activeTab === tab.id
                 ? "bg-violet-600 text-white"
-                : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200"
+                : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200 active:bg-zinc-700"
             }`}
           >
-            {tab.icon}{tab.label}
+            {tab.icon}<span className="hidden sm:inline">{tab.label}</span><span className="sm:hidden">{tab.label.split(' ')[0]}</span>
           </button>
         ))}
       </div>
@@ -221,7 +221,7 @@ export default function MontagePage() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 sm:gap-3">
                   {Object.entries(status.tools).map(([tool, ok]) => (
                     <div key={tool} className="bg-zinc-800/50 rounded-lg p-3 text-center">
                       <div className="text-xs text-zinc-500 mb-1">{tool.replace(/_/g, " ")}</div>
@@ -328,13 +328,13 @@ export default function MontagePage() {
                   ))}
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
                   <div className="flex justify-center">
                     <video
                       key={demoVoice}
                       controls
                       autoPlay={false}
-                      className="rounded-lg border border-zinc-700 max-h-[480px]"
+                      className="rounded-lg border border-zinc-700 max-h-[360px] sm:max-h-[480px] w-full"
                     >
                       <source src={`${API_URL}/api/montage/files/output/demo_${demoVoice}.mp4`} type="video/mp4" />
                       Ваш браузер не поддерживает видео.
@@ -412,7 +412,7 @@ export default function MontagePage() {
               </div>
 
               {/* Template & Style */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
                 <div>
                   <Label className="text-zinc-400 text-xs">Шаблон драматургии</Label>
                   <Select value={templateId} onValueChange={setTemplateId}>
@@ -461,7 +461,7 @@ export default function MontagePage() {
                 <h4 className="text-sm font-semibold text-zinc-300 flex items-center gap-2">
                   <Sparkles className="h-4 w-4 text-yellow-400" /> Текстовые оверлеи
                 </h4>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
                   <div>
                     <Label className="text-zinc-400 text-xs">Хук-текст (начало)</Label>
                     <Input value={hookText} onChange={(e) => setHookText(e.target.value)} className="bg-zinc-800 border-zinc-700 text-white" placeholder="WAIT FOR IT..." />
@@ -478,7 +478,7 @@ export default function MontagePage() {
               </div>
 
               {/* Music & Duration */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                 <div>
                   <Label className="text-zinc-400 text-xs">Музыка</Label>
                   <Select value={musicTrack} onValueChange={setMusicTrack}>
@@ -515,7 +515,7 @@ export default function MontagePage() {
                 </div>
 
                 {enableGirl && (
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-zinc-800/50 rounded-lg p-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4 bg-zinc-800/50 rounded-lg p-3 sm:p-4">
                     <div>
                       <Label className="text-zinc-400 text-xs">Голос</Label>
                       <Select value={girlVoice} onValueChange={setGirlVoice}>
@@ -594,7 +594,7 @@ export default function MontagePage() {
 
                   {result.success && (
                     <>
-                      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 sm:gap-3 text-xs">
                         <div className="bg-zinc-800/50 rounded p-2">
                           <div className="text-zinc-500">Длительность</div>
                           <div className="text-white font-medium">{formatDuration(result.duration || 0)}</div>

@@ -75,14 +75,15 @@ export default function TrendsPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-xl font-bold text-white">Анализ трендов</h2>
-          <p className="text-sm text-zinc-400">Отслеживай тренды CS2 на платформах</p>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-lg sm:text-xl font-bold text-white">Анализ трендов</h2>
+          <p className="text-xs sm:text-sm text-zinc-400">Отслеживай тренды CS2 на платформах</p>
         </div>
-        <Button onClick={handleAnalyze} disabled={analyzing} className="bg-violet-600 hover:bg-violet-700">
-          <RefreshCw className={`h-4 w-4 mr-2 ${analyzing ? "animate-spin" : ""}`} />
-          {analyzing ? "Анализ..." : "Анализировать"}
+        <Button onClick={handleAnalyze} disabled={analyzing} className="bg-violet-600 hover:bg-violet-700 active:bg-violet-800 shrink-0 text-xs sm:text-sm">
+          <RefreshCw className={`h-4 w-4 mr-1 sm:mr-2 ${analyzing ? "animate-spin" : ""}`} />
+          <span className="hidden sm:inline">{analyzing ? "Анализ..." : "Анализировать"}</span>
+          <span className="sm:hidden">{analyzing ? "..." : "Анализ"}</span>
         </Button>
       </div>
 
@@ -95,8 +96,8 @@ export default function TrendsPage() {
           <ResponsiveContainer width="100%" height={300}>
             <BarChart data={chartData} layout="vertical">
               <CartesianGrid strokeDasharray="3 3" stroke="#333" />
-              <XAxis type="number" domain={[0, 10]} tick={{ fill: "#999" }} />
-              <YAxis type="category" dataKey="name" width={150} tick={{ fontSize: 11, fill: "#999" }} />
+              <XAxis type="number" domain={[0, 10]} tick={{ fill: "#999", fontSize: 11 }} />
+              <YAxis type="category" dataKey="name" width={100} tick={{ fontSize: 10, fill: "#999" }} />
               <Tooltip contentStyle={{ background: "#18181b", border: "1px solid #333", borderRadius: 8 }} />
               <Bar dataKey="score" fill="#8b5cf6" radius={[0, 4, 4, 0]} />
             </BarChart>

@@ -67,14 +67,14 @@ export default function StreamsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-xl font-bold text-white">Стримы и Twitch</h2>
-          <p className="text-sm text-zinc-400">Управление стримами, анализ стримеров, система нарезки</p>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-lg sm:text-xl font-bold text-white truncate">Стримы и Twitch</h2>
+          <p className="text-xs sm:text-sm text-zinc-400">Управление стримами, анализ стримеров, система нарезки</p>
         </div>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
-            <Button className="bg-violet-600 hover:bg-violet-700"><Plus className="h-4 w-4 mr-2" /> Добавить стрим</Button>
+            <Button className="bg-violet-600 hover:bg-violet-700 active:bg-violet-800 shrink-0 text-xs sm:text-sm"><Plus className="h-4 w-4 sm:mr-2" /><span className="hidden sm:inline">Добавить стрим</span></Button>
           </DialogTrigger>
           <DialogContent className="bg-zinc-900 border-zinc-800">
             <DialogHeader><DialogTitle className="text-white">Новый стрим</DialogTitle></DialogHeader>
@@ -95,10 +95,10 @@ export default function StreamsPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-2">
+      <div className="flex gap-1.5 sm:gap-2 flex-wrap">
         {tabs.map((tab) => (
-          <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${activeTab === tab.id ? "bg-violet-600 text-white" : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200"}`}>
-            {tab.icon}{tab.label}
+          <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-medium transition-colors ${activeTab === tab.id ? "bg-violet-600 text-white" : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200 active:bg-zinc-700"}`}>
+            {tab.icon}<span className="hidden sm:inline">{tab.label}</span><span className="sm:hidden">{tab.label.split(' ')[0]}</span>
           </button>
         ))}
       </div>
@@ -108,7 +108,7 @@ export default function StreamsPage() {
         {activeTab === "streams" && (<div className="space-y-4">
           <h3 className="text-sm font-semibold text-zinc-300">Отслеживаемые стримы</h3>
           {streams.length === 0 ? (<div className="text-zinc-400 text-center py-8">Стримов пока нет. Нажми «Добавить стрим».</div>) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
               {streams.map((stream) => (
                 <Card key={stream.id} className="bg-zinc-900 border-zinc-800 hover:border-violet-800/50 transition-colors">
                   <CardContent className="pt-4 pb-4">
@@ -144,7 +144,7 @@ export default function StreamsPage() {
             <div className="flex items-center gap-2 mb-2"><TrendingUp className="h-4 w-4 text-violet-400" /><h3 className="text-sm font-semibold text-white">Рекомендация</h3></div>
             <p className="text-xs text-zinc-400">Приоритет: <span className="text-violet-400">ESLCS/BLASTPremier</span> (турниры = максимум хайлайтов), <span className="text-green-400">gaules/yuurih</span> (LATAM — низкая конкуренция), <span className="text-yellow-400">s1mple/donk</span> (CIS — глобальный аппил)</p>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
             {twitchStreamers.map((streamer) => (
               <Card key={streamer.username} className="bg-zinc-900 border-zinc-800 hover:border-violet-800/50 transition-colors">
                 <CardContent className="pt-4 pb-4">
@@ -181,7 +181,7 @@ export default function StreamsPage() {
               <Badge className={pipeline.auto_detection.enabled ? "bg-green-500/20 text-green-400" : "bg-zinc-500/20 text-zinc-400"}>{pipeline.auto_detection.enabled ? "Активно" : "Выкл"}</Badge>
             </div>
             <p className="text-xs text-zinc-400 mb-4">{pipeline.auto_detection.description}</p>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-3">
               {Object.entries(pipeline.auto_detection.triggers).map(([key, trigger]) => (
                 <div key={key} className="bg-zinc-800/50 rounded-lg p-3">
                   <div className="flex items-center justify-between mb-1"><span className="text-xs font-medium text-white">{key.replace(/_/g, " ").toUpperCase()}</span><span className="text-xs text-yellow-400 font-mono">w: {trigger.weight}</span></div>
@@ -194,14 +194,14 @@ export default function StreamsPage() {
           {/* Clip Settings */}
           <Card className="bg-zinc-900 border-zinc-800"><CardContent className="pt-4 pb-4">
             <div className="flex items-center gap-2 mb-3"><Settings className="h-5 w-5 text-zinc-400" /><h3 className="text-white font-semibold">Настройки клипов</h3></div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3 mb-4">
               <div className="bg-zinc-800/50 rounded p-2 text-center"><div className="text-xs text-zinc-500">Длительность</div><div className="text-lg text-white font-bold">{pipeline.clip_settings.default_duration_sec}с</div></div>
               <div className="bg-zinc-800/50 rounded p-2 text-center"><div className="text-xs text-zinc-500">Буфер до</div><div className="text-lg text-white font-bold">{pipeline.clip_settings.pre_moment_buffer_sec}с</div></div>
               <div className="bg-zinc-800/50 rounded p-2 text-center"><div className="text-xs text-zinc-500">Буфер после</div><div className="text-lg text-white font-bold">{pipeline.clip_settings.post_moment_buffer_sec}с</div></div>
               <div className="bg-zinc-800/50 rounded p-2 text-center"><div className="text-xs text-zinc-500">Макс. длина</div><div className="text-lg text-white font-bold">{pipeline.clip_settings.max_clip_duration_sec}с</div></div>
             </div>
             <h4 className="text-xs font-semibold text-zinc-300 mb-2">Форматы вывода</h4>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3">
               {Object.entries(pipeline.clip_settings.output_formats).map(([name, fmt]) => (
                 <div key={name} className="bg-zinc-800/50 rounded-lg p-3"><div className="text-xs font-medium text-white mb-1">{name.replace(/_/g, " ").toUpperCase()}</div><div className="text-xs text-zinc-400">{fmt.resolution} &#8226; {fmt.aspect_ratio} &#8226; макс. {fmt.max_duration}с</div></div>
               ))}

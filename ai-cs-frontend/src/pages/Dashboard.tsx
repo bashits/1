@@ -57,23 +57,23 @@ export default function Dashboard() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-xl font-bold text-white">Панель управления</h2>
-          <p className="text-sm text-zinc-400">Статус системы и обзор контента</p>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-lg sm:text-xl font-bold text-white truncate">Панель управления</h2>
+          <p className="text-xs sm:text-sm text-zinc-400">Статус системы и обзор контента</p>
         </div>
         <button
           onClick={handleRefresh}
           disabled={refreshing}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-sm font-medium transition-colors disabled:opacity-50"
+          className="flex items-center gap-2 px-3 py-2 rounded-lg bg-violet-600 hover:bg-violet-700 active:bg-violet-800 text-white text-sm font-medium transition-colors disabled:opacity-50 shrink-0"
         >
           <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
-          Обновить
+          <span className="hidden sm:inline">Обновить</span>
         </button>
       </div>
 
       {/* Quick Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 sm:gap-4">
         <StatCard
           icon={<Clapperboard className="h-4 w-4 text-violet-400" />}
           label="Монтажей"
@@ -107,7 +107,7 @@ export default function Dashboard() {
       </div>
 
       {/* System Health */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
         {/* Montage Engine Status */}
         <Card className="bg-zinc-900 border-zinc-800">
           <CardHeader className="pb-3">
@@ -122,7 +122,7 @@ export default function Dashboard() {
           <CardContent>
             {montageStatus ? (
               <div className="space-y-4">
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 xs:grid-cols-2 md:grid-cols-3 gap-2 sm:gap-3">
                   {Object.entries(montageStatus.tools).map(([tool, ok]) => (
                     <div key={tool} className="bg-zinc-800/50 rounded-lg p-3 flex items-center gap-2">
                       {ok ? <CheckCircle className="h-4 w-4 text-green-400 shrink-0" /> : <XCircle className="h-4 w-4 text-red-400 shrink-0" />}
@@ -224,10 +224,10 @@ export default function Dashboard() {
               <div>
                 <h4 className="text-xs font-semibold text-green-400 mb-2">Бесплатные</h4>
                 {montageStatus.apis_needed.free.map((a) => (
-                  <div key={a.name} className="flex items-center gap-2 text-xs text-zinc-300 mb-1.5">
+                  <div key={a.name} className="flex items-center gap-2 text-xs text-zinc-300 mb-1.5 flex-wrap">
                     <CheckCircle className="h-3.5 w-3.5 text-green-400 shrink-0" />
                     <span className="font-medium">{a.name}</span>
-                    <span className="text-zinc-500">— {a.purpose}</span>
+                    <span className="text-zinc-500 hidden sm:inline">— {a.purpose}</span>
                     <Badge className="bg-green-500/10 text-green-400 text-[10px] ml-auto">{a.status}</Badge>
                   </div>
                 ))}
@@ -235,10 +235,10 @@ export default function Dashboard() {
               <div>
                 <h4 className="text-xs font-semibold text-yellow-400 mb-2">Платные (опционально)</h4>
                 {montageStatus.apis_needed.paid.map((a) => (
-                  <div key={a.name} className="flex items-center gap-2 text-xs text-zinc-300 mb-1.5">
+                  <div key={a.name} className="flex items-center gap-2 text-xs text-zinc-300 mb-1.5 flex-wrap">
                     <Volume2 className="h-3.5 w-3.5 text-yellow-400 shrink-0" />
                     <span className="font-medium">{a.name}</span>
-                    <span className="text-zinc-500">— {a.purpose}</span>
+                    <span className="text-zinc-500 hidden sm:inline">— {a.purpose}</span>
                     <Badge className="bg-yellow-500/10 text-yellow-400 text-[10px] ml-auto">{a.cost}</Badge>
                   </div>
                 ))}
@@ -258,7 +258,7 @@ export default function Dashboard() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {montageClips.slice(0, 6).map((clip) => (
                 <div key={clip.filename} className="bg-zinc-800/50 rounded-lg p-3">
                   <div className="flex items-center gap-2 mb-2">
@@ -286,7 +286,7 @@ export default function Dashboard() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {trends.sort((a, b) => b.score - a.score).slice(0, 6).map((trend) => (
                 <div key={trend.id} className="bg-zinc-800/50 rounded-lg p-3 flex items-start justify-between">
                   <div className="flex-1 min-w-0">
@@ -317,7 +317,7 @@ export default function Dashboard() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {profiles.slice(0, 6).map((profile) => (
                 <div key={profile.id} className="bg-zinc-800/50 rounded-lg p-3 flex items-center gap-3">
                   {profile.reference_images && profile.reference_images.length > 0 ? (
@@ -352,7 +352,7 @@ export default function Dashboard() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {Object.entries(montageStatus.templates).map(([id, tmpl]) => (
                 <div key={id} className="bg-zinc-800/50 rounded-lg p-3">
                   <div className="flex items-center justify-between mb-1">
@@ -384,7 +384,7 @@ function StatCard({ icon, label, value, color }: { icon: React.ReactNode; label:
           {icon}
           <span className="text-xs">{label}</span>
         </div>
-        <div className={`text-2xl font-bold ${color || "text-white"}`}>{value}</div>
+        <div className={`text-xl sm:text-2xl font-bold ${color || "text-white"}`}>{value}</div>
       </CardContent>
     </Card>
   );

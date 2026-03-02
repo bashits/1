@@ -222,17 +222,17 @@ export default function ClipsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-xl font-bold text-white">Клипы и Нарезка</h2>
-          <p className="text-sm text-zinc-400">Нарезка видео, обработка, готовые клипы</p>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-lg sm:text-xl font-bold text-white truncate">Клипы и Нарезка</h2>
+          <p className="text-xs sm:text-sm text-zinc-400">Нарезка видео, обработка, готовые клипы</p>
         </div>
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-2">
+      <div className="flex gap-1.5 sm:gap-2 flex-wrap">
         {tabs.map((tab) => (
-          <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${activeTab === tab.id ? "bg-violet-600 text-white" : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200"}`}>
+          <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-medium transition-colors ${activeTab === tab.id ? "bg-violet-600 text-white" : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200 active:bg-zinc-700"}`}>
             {tab.icon}{tab.label}
           </button>
         ))}
@@ -249,7 +249,7 @@ export default function ClipsPage() {
             <CardContent>
               {executorStatus ? (
                 <div className="space-y-4">
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
                     <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
                       <div className="text-xs text-zinc-500 mb-1">FFmpeg</div>
                       <div className="flex items-center justify-center gap-1">
