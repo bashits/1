@@ -900,8 +900,9 @@ async def generate_lipsync_video(
                 saved_file = {"url": video_url, "error": str(e)}
 
     cost = _calc_lipsync_cost(model_key, duration_seconds)
+    success = saved_file is not None and "error" not in (saved_file or {})
     return {
-        "success": True,
+        "success": success,
         "video": saved_file,
         "model": model_id,
         "model_name": model_info["name"],
