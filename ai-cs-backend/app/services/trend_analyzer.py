@@ -368,7 +368,7 @@ async def _youtube_api_search(api_key: str) -> list[dict]:
                 "https://www.googleapis.com/youtube/v3/search",
                 params={
                     "key": api_key,
-                    "q": "CS2 highlights 2025",
+                    "q": f"CS2 highlights {datetime.utcnow().year}",
                     "part": "snippet",
                     "type": "video",
                     "order": "viewCount",
@@ -483,7 +483,7 @@ async def _scrape_youtube_search_page() -> list[dict]:
     """Scrape YouTube search results page for CS2 trending content."""
     queries = [
         "CS2 highlights today",
-        "CS2 best clips 2025",
+        f"CS2 best clips {datetime.utcnow().year}",
         "CS2 funny moments",
         "CS2 pro plays",
     ]
@@ -1287,6 +1287,7 @@ def get_system_status() -> dict:
             "TWITCH_CLIENT_SECRET": bool(
                 os.environ.get("TWITCH_CLIENT_SECRET")
             ),
+            "TWITCH_ACCESS_TOKEN": bool(os.environ.get("TWITCH_ACCESS_TOKEN")),
             "YOUTUBE_API_KEY": bool(os.environ.get("YOUTUBE_API_KEY")),
         },
     }

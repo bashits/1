@@ -65,7 +65,7 @@ class FreshnessGate:
                 "gate": "twitch_freshness",
                 "error": "Twitch data is not from live API/scraping sources (static fallback detected).",
                 "sources_found": list(sources),
-                "remedy": "Set TWITCH_CLIENT_ID + TWITCH_CLIENT_SECRET or fix TwitchTracker scraping.",
+                "remedy": "Set TWITCH_ACCESS_TOKEN or TWITCH_CLIENT_ID + TWITCH_CLIENT_SECRET, or fix TwitchTracker scraping.",
             }
 
         # Visible freshness timestamp must exist
@@ -198,7 +198,7 @@ class FreshnessGate:
                 "passed": False,
                 "gate": "trend_twitch_source",
                 "error": f"Trend analysis is based on non-live Twitch source: {twitch_source}.",
-                "remedy": "Configure TWITCH_CLIENT_ID + TWITCH_CLIENT_SECRET or fix Twitch scraping.",
+                "remedy": "Configure TWITCH_ACCESS_TOKEN or TWITCH_CLIENT_ID + TWITCH_CLIENT_SECRET, or fix Twitch scraping.",
             }
 
         # Check freshness of scraped_at timestamp
