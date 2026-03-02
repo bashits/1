@@ -110,7 +110,7 @@ async def get_twitch_clips(
     from datetime import timedelta
 
     headers = {
-        "Client-ID": TWITCH_CLIENT_ID,
+        "Client-ID": TWITCH_CLIENT_ID or os.environ.get("TWITCH_CLIENT_ID", ""),
         "Authorization": f"Bearer {token}",
     }
 
