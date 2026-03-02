@@ -1859,18 +1859,20 @@ async def generate_girl_animated_overlay(
     # - Scale image, apply breathing animation via zoompan
     # - Crop to circle using geq alpha mask
     # - Output as MP4 with audio
+    # Use a simpler, more reliable approach: scale oscillation for breathing effect
+    # zoompan's 't' variable is unreliable across FFmpeg versions
+    pad_size = int(size * 1.06)  # extra space for breathing animation
     filter_complex = (
         # Create video from static image at 30fps
         f"[0:v]loop=loop=-1:size=1:start=0,"
         f"setpts=N/30/TB,"
         f"trim=duration={d},"
-        f"scale={size*2}:{size*2},"
-        # Breathing + talking animation: subtle zoom oscillation
-        # The sin() creates a gentle breathing effect
-        # The audio-reactive part comes from the bouncy overlay in assembly
-        f"zoompan=z='1.0+0.03*sin(2*PI*t/1.5)'"
-        f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
-        f":d=1:s={size}x{size}:fps=30,"
+        f"scale={pad_size}:{pad_size},"
+        # Breathing animation: gentle scale oscillation using crop offset
+        # sin(2*PI*t/1.5) creates a ~0.67Hz breathing cycle
+        f"crop=w={size}:h={size}"
+        f":x='({pad_size}-{size})/2*(1+sin(2*PI*t/1.5))'"
+        f":y='({pad_size}-{size})/2*(1+sin(2*PI*t/2.0))',"
         # Crop to circle with alpha
         f"format=rgba,"
         f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':"
