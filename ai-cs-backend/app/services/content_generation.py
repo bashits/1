@@ -894,6 +894,8 @@ async def generate_lipsync_video(
                         "file_path": str(fpath),
                         "url": video_url,
                     }
+                else:
+                    saved_file = {"url": video_url, "error": f"Download failed: HTTP {vid_resp.status_code}"}
             except Exception as e:
                 saved_file = {"url": video_url, "error": str(e)}
 
@@ -954,6 +956,8 @@ async def generate_video_from_image(
                         "file_path": str(fpath),
                         "url": video_url,
                     }
+                else:
+                    saved_file = {"url": video_url, "error": f"Download failed: HTTP {vid_resp.status_code}"}
             except Exception as e:
                 saved_file = {"url": video_url, "error": str(e)}
 
