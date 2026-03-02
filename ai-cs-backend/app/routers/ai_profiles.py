@@ -10,8 +10,10 @@ Supports:
 """
 
 import json
+import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -56,6 +58,78 @@ router = APIRouter(prefix="/api/ai-profiles", tags=["ai-profiles"])
 
 
 # ─── Helper ──────────────────────────────────────────────────────────
+logger = logging.getLogger(__name__)
+
+
+async def _get_profile_storage_size(db: aiosqlite.Connection, profile_id: int) -> dict:
+    """Calculate total storage used by an AI girl profile.
+
+    Scans content_items, voice_samples, and profile_gallery for local file paths,
+    sums file sizes on disk. Returns breakdown by content type + total.
+    """
+    storage: dict[str, dict] = {}
+    total_bytes = 0
+    total_files = 0
+
+    # content_items (photos, videos, audio)
+    cursor = await db.execute(
+        "SELECT content_type, file_path FROM content_items WHERE profile_id = ? AND file_path IS NOT NULL",
+        (profile_id,),
+    )
+    for row in await cursor.fetchall():
+        ct = row["content_type"] or "other"
+        fp = row["file_path"]
+        if fp and os.path.exists(fp):
+            size = os.path.getsize(fp)
+            if ct not in storage:
+                storage[ct] = {"files": 0, "bytes": 0}
+            storage[ct]["files"] += 1
+            storage[ct]["bytes"] += size
+            total_bytes += size
+            total_files += 1
+
+    # voice_samples
+    cursor2 = await db.execute(
+        "SELECT file_path FROM voice_samples WHERE profile_id = ? AND file_path IS NOT NULL",
+        (profile_id,),
+    )
+    for row in await cursor2.fetchall():
+        fp = row["file_path"]
+        if fp and os.path.exists(fp):
+            size = os.path.getsize(fp)
+            if "voice" not in storage:
+                storage["voice"] = {"files": 0, "bytes": 0}
+            storage["voice"]["files"] += 1
+            storage["voice"]["bytes"] += size
+            total_bytes += size
+            total_files += 1
+
+    # Format human-readable sizes
+    def _fmt(b: int) -> str:
+        if b < 1024:
+            return f"{b} B"
+        if b < 1024 * 1024:
+            return f"{b / 1024:.1f} KB"
+        if b < 1024 * 1024 * 1024:
+            return f"{b / (1024 * 1024):.1f} MB"
+        return f"{b / (1024 * 1024 * 1024):.2f} GB"
+
+    breakdown = {}
+    for ct, info in storage.items():
+        breakdown[ct] = {
+            "files": info["files"],
+            "bytes": info["bytes"],
+            "human": _fmt(info["bytes"]),
+        }
+
+    return {
+        "total_bytes": total_bytes,
+        "total_human": _fmt(total_bytes),
+        "total_files": total_files,
+        "breakdown": breakdown,
+    }
+
+
 def _parse_profile(row: aiosqlite.Row) -> dict:
     d = dict(row)
     for key in ("appearance", "voice_config", "personality", "elevenlabs_voice_settings",
@@ -261,7 +335,12 @@ async def get_video_cost_estimate(
 async def list_profiles(db: aiosqlite.Connection = Depends(get_db)):
     cursor = await db.execute("SELECT * FROM ai_profiles ORDER BY created_at DESC")
     rows = await cursor.fetchall()
-    return [_parse_profile(row) for row in rows]
+    profiles = []
+    for row in rows:
+        p = _parse_profile(row)
+        p["storage"] = await _get_profile_storage_size(db, p["id"])
+        profiles.append(p)
+    return profiles
 
 
 @router.post("/generate-persona")
@@ -433,7 +512,9 @@ async def get_profile(profile_id: int, db: aiosqlite.Connection = Depends(get_db
     row = await cursor.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Profile not found")
-    return _parse_profile(row)
+    p = _parse_profile(row)
+    p["storage"] = await _get_profile_storage_size(db, profile_id)
+    return p
 
 
 @router.put("/{profile_id}")

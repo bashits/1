@@ -2,6 +2,12 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 load_dotenv()
 
+import asyncio
+import logging
+import time
+from datetime import datetime, timedelta
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -10,11 +16,80 @@ import os
 from app.database import init_db
 from app.routers import streams, moments, templates, clips, ab_tests, trends, analytics_router, ai_girl, ai_profiles, tool_registry, accounts, generation, clip_executor_router, montage_router, pipeline_router, dual_source_router
 
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# CS2 Reels cleanup — delete files older than 7 days
+# ---------------------------------------------------------------------------
+CS2_CLIPS_DIRS = [
+    Path("/root/projects/ai-cs-backend/clips"),
+    Path(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "clips")),
+    Path(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")),
+]
+CS2_REEL_EXTENSIONS = {".mp4", ".webm", ".mkv", ".avi", ".mov"}
+CLEANUP_MAX_AGE_DAYS = 7
+
+
+def _cleanup_cs2_reels_sync() -> dict:
+    """Scan CS2 clips directories and delete video files older than 7 days.
+    Returns summary of cleanup actions."""
+    cutoff = time.time() - (CLEANUP_MAX_AGE_DAYS * 86400)
+    deleted = []
+    errors = []
+    scanned = 0
+
+    for clips_dir in CS2_CLIPS_DIRS:
+        if not clips_dir.exists():
+            continue
+        for f in clips_dir.rglob("*"):
+            if not f.is_file():
+                continue
+            if f.suffix.lower() not in CS2_REEL_EXTENSIONS:
+                continue
+            scanned += 1
+            try:
+                mtime = f.stat().st_mtime
+                if mtime < cutoff:
+                    size = f.stat().st_size
+                    f.unlink()
+                    deleted.append({"path": str(f), "size_bytes": size, "age_days": round((time.time() - mtime) / 86400, 1)})
+                    logger.info("CS2 cleanup: deleted %s (%.1f days old)", f, (time.time() - mtime) / 86400)
+            except Exception as exc:
+                errors.append({"path": str(f), "error": str(exc)})
+
+    total_freed = sum(d["size_bytes"] for d in deleted)
+    return {
+        "scanned": scanned,
+        "deleted_count": len(deleted),
+        "freed_bytes": total_freed,
+        "freed_human": f"{total_freed / (1024*1024):.1f} MB" if total_freed > 0 else "0 B",
+        "errors": errors,
+        "deleted_files": deleted,
+    }
+
+
+async def _cleanup_loop():
+    """Background task: run CS2 reels cleanup every 24 hours."""
+    while True:
+        try:
+            result = _cleanup_cs2_reels_sync()
+            logger.info(
+                "CS2 cleanup cycle: scanned=%d, deleted=%d, freed=%s",
+                result["scanned"], result["deleted_count"], result["freed_human"],
+            )
+        except Exception as exc:
+            logger.exception("CS2 cleanup error: %s", exc)
+        await asyncio.sleep(86400)  # 24 hours
+
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     await init_db()
+    # Start background CS2 reels cleanup
+    cleanup_task = asyncio.create_task(_cleanup_loop())
+    logger.info("CS2 reels cleanup task started (TTL=%d days)", CLEANUP_MAX_AGE_DAYS)
     yield
+    cleanup_task.cancel()
 
 
 app = FastAPI(
@@ -60,6 +135,71 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 @app.get("/healthz")
 async def healthz():
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Storage management endpoints
+# ---------------------------------------------------------------------------
+@app.get("/api/storage")
+async def get_storage_overview():
+    """Overall server storage status + CS2 clips breakdown."""
+    import shutil
+
+    # Disk usage
+    total, used, free = shutil.disk_usage("/")
+
+    # CS2 clips stats
+    cs2_total = 0
+    cs2_files = 0
+    cs2_oldest = None
+    now = time.time()
+    for clips_dir in CS2_CLIPS_DIRS:
+        if not clips_dir.exists():
+            continue
+        for f in clips_dir.rglob("*"):
+            if f.is_file() and f.suffix.lower() in CS2_REEL_EXTENSIONS:
+                cs2_files += 1
+                cs2_total += f.stat().st_size
+                age = (now - f.stat().st_mtime) / 86400
+                if cs2_oldest is None or age > cs2_oldest:
+                    cs2_oldest = age
+
+    def _fmt(b: int) -> str:
+        if b < 1024:
+            return f"{b} B"
+        if b < 1024 * 1024:
+            return f"{b / 1024:.1f} KB"
+        if b < 1024 * 1024 * 1024:
+            return f"{b / (1024 * 1024):.1f} MB"
+        return f"{b / (1024 * 1024 * 1024):.2f} GB"
+
+    return {
+        "disk": {
+            "total": _fmt(total),
+            "used": _fmt(used),
+            "free": _fmt(free),
+            "used_pct": round(used / total * 100, 1),
+        },
+        "cs2_reels": {
+            "files": cs2_files,
+            "total_size": _fmt(cs2_total),
+            "total_bytes": cs2_total,
+            "oldest_days": round(cs2_oldest, 1) if cs2_oldest else 0,
+            "ttl_days": CLEANUP_MAX_AGE_DAYS,
+            "policy": "auto-delete after 7 days",
+        },
+        "ai_girl_content": {
+            "policy": "permanent — never auto-deleted",
+            "note": "Per-profile storage visible at GET /api/ai-profiles/ and GET /api/ai-profiles/{id}",
+        },
+    }
+
+
+@app.post("/api/storage/cleanup-cs2")
+async def run_cs2_cleanup():
+    """Manually trigger CS2 reels cleanup (delete files > 7 days)."""
+    result = _cleanup_cs2_reels_sync()
+    return result
 
 
 @app.post("/api/reseed")
