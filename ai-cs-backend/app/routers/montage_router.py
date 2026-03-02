@@ -374,15 +374,18 @@ async def list_clips():
 async def serve_file(subdir: str, filename: str):
     """Serve generated files (output, assets, temp, voice)."""
     from pathlib import Path
-    voice_dir = Path("/data/generated/voice") if os.path.exists("/data") else Path(
-        os.path.join(os.path.dirname(__file__), "..", "..", "generated", "voice")
+    generated_base = Path("/data/generated") if os.path.exists("/data") else Path(
+        os.path.join(os.path.dirname(__file__), "..", "..", "generated")
     )
     allowed_dirs = {
         "output": MONTAGE_DIR / "output",
         "sfx": MONTAGE_DIR / "assets" / "sfx",
         "music": MONTAGE_DIR / "assets" / "music",
         "temp": MONTAGE_DIR / "temp",
-        "voice": voice_dir,
+        "voice": generated_base / "voice",
+        "audio": generated_base / "audio",
+        "video": generated_base / "video",
+        "photos": generated_base / "photos",
     }
     base_dir = allowed_dirs.get(subdir)
     if not base_dir:

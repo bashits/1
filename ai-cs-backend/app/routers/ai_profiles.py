@@ -239,11 +239,11 @@ async def get_video_cost_estimate(
     voice_engine: str = "elevenlabs",
 ):
     # Validate against our discrete UI options
-    allowed = set(VIDEO_DURATION_OPTIONS)
-    if int(duration_seconds) not in allowed:
+    allowed = {float(d) for d in VIDEO_DURATION_OPTIONS}
+    if duration_seconds not in allowed:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid duration_seconds={duration_seconds}. Allowed: {sorted(allowed)}",
+            detail=f"Invalid duration_seconds={duration_seconds}. Allowed: {sorted(VIDEO_DURATION_OPTIONS)}",
         )
     return calculate_video_cost(
         duration_seconds=duration_seconds,
@@ -919,11 +919,11 @@ async def generate_video(
 
     requested_duration = float(req.duration_seconds) if req.duration_seconds else None
     if requested_duration is not None:
-        allowed = set(VIDEO_DURATION_OPTIONS)
-        if int(requested_duration) not in allowed:
+        allowed = {float(d) for d in VIDEO_DURATION_OPTIONS}
+        if requested_duration not in allowed:
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid duration_seconds={requested_duration}. Allowed: {sorted(allowed)}",
+                detail=f"Invalid duration_seconds={requested_duration}. Allowed: {sorted(VIDEO_DURATION_OPTIONS)}",
             )
 
     voice_duration = float(voice_result.get("duration") or 3.0)

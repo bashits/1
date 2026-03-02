@@ -1310,7 +1310,7 @@ function GenerateTab({
                     <audio
                       controls
                       className="w-full"
-                      src={`${API_URL}/api/montage/files/${voiceResult.file_path?.replace("/data/", "")}`}
+                      src={`${API_URL}/api/montage/files/${voiceResult.file_path?.split("/").slice(-2).join("/")}`}
                     />
                   )}
                   <div className="flex gap-3 text-xs text-zinc-400">
@@ -1650,7 +1650,7 @@ function ContentTab({
                     />
                   ) : item.file_path ? (
                     <video
-                      src={`${API_URL}/api/montage/files/${item.file_path.replace("/data/", "")}`}
+                      src={`${API_URL}/api/montage/files/${item.file_path.split("/").slice(-2).join("/")}`}
                       className="w-full aspect-video object-cover"
                       controls
                       preload="metadata"
@@ -1686,7 +1686,7 @@ function ContentTab({
                     <audio
                       controls
                       className="w-full h-8"
-                      src={`${API_URL}/api/montage/files/${item.file_path.replace("/data/", "")}`}
+                      src={`${API_URL}/api/montage/files/${item.file_path.split("/").slice(-2).join("/")}`}
                     />
                   )}
                 </div>
@@ -1744,7 +1744,7 @@ function ContentTab({
               </div>
               {/* Audio player for voice items */}
               {item.content_type === "voice" && item.file_path && (
-                <audio controls className="h-8 w-40 flex-shrink-0" src={`${API_URL}/api/montage/files/${item.file_path.replace("/data/", "")}`} />
+                <audio controls className="h-8 w-40 flex-shrink-0" src={`${API_URL}/api/montage/files/${item.file_path.split("/").slice(-2).join("/")}`} />
               )}
               {/* Open link for photos/videos */}
               {item.file_url && item.content_type !== "voice" && (
@@ -2160,7 +2160,7 @@ function BrainTab({
                         <audio
                           controls
                           className="h-8"
-                          src={`${API_URL}/api/montage/files/${s.file_path.replace("/data/", "")}`}
+                          src={`${API_URL}/api/montage/files/${s.file_path.split("/").slice(-2).join("/")}`}
                         />
                       )}
                     </div>
