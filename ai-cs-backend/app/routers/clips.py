@@ -26,7 +26,7 @@ async def list_clips(
     if status:
         query += " AND status = ?"
         params.append(status)
-    if ab_test_id:
+    if ab_test_id is not None:
         query += " AND ab_test_id = ?"
         params.append(ab_test_id)
 

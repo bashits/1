@@ -854,7 +854,18 @@ async def generate_lipsync_video(
         if model_key == "kling_avatar":
             input_data["prompt"] = "."
     else:
-        # Models that accept video + audio (kling_lipsync_v2v, latentsync)
+        # Models that accept video + audio (kling_lipsync_v2v, latentsync).
+        # Guard: if the caller passed a still-image URL (the normal photo-generation
+        # flow), reject early instead of sending it to a video-only API.
+        if image_url and not image_url.endswith((".mp4", ".webm", ".mov")):
+            return {
+                "success": False,
+                "error": (
+                    f"Model '{model_key}' requires video input (input_type='video'), "
+                    "but a still-image URL was provided. Use omnihuman, kling_avatar, "
+                    "or veed_fabric for image-to-video lipsync."
+                ),
+            }
         input_data = {
             "video_url": image_url,  # caller must pass a video URL for v2v models
             "audio_url": audio_url,

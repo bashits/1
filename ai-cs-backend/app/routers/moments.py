@@ -20,7 +20,7 @@ async def list_moments(
     query = "SELECT * FROM moments WHERE score >= ?"
     params: list = [min_score]
 
-    if stream_id:
+    if stream_id is not None:
         query += " AND stream_id = ?"
         params.append(stream_id)
     if moment_type:
