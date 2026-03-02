@@ -17,7 +17,7 @@ import {
   Gallery
 } from "@/hooks/useApi";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
 
 const VOICE_STYLE_LABELS: Record<string, string> = {
   cheerful: "бодрый",

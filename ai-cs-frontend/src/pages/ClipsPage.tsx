@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { api, Clip, ClipExecutorStatus, ProcessedClipFile } from "@/hooks/useApi";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
 
 const FORMAT_COLORS: Record<string, string> = {
   clean_highlight: "bg-blue-500/20 text-blue-400",

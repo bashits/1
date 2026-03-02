@@ -28,7 +28,7 @@ import {
   Camera, Download, Star, Dice5, Loader2, User,
 } from "lucide-react";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
 
 type Tab = "overview" | "generate" | "content" | "social" | "brain";
 
