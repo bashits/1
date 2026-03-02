@@ -1,52 +1,30 @@
 import { useState } from "react";
 import {
-  LayoutDashboard, Film, TrendingUp, FlaskConical, Crosshair,
-  Layers, Radio, Sparkles, UserCircle, Wrench, Globe, Wand2, Clapperboard
+  LayoutDashboard, Film, TrendingUp, Radio, UserCircle, Clapperboard
 } from "lucide-react";
 import Dashboard from "@/pages/Dashboard";
 import ClipsPage from "@/pages/ClipsPage";
 import TrendsPage from "@/pages/TrendsPage";
-import ABTestsPage from "@/pages/ABTestsPage";
-import MomentsPage from "@/pages/MomentsPage";
-import TemplatesPage from "@/pages/TemplatesPage";
 import StreamsPage from "@/pages/StreamsPage";
-import AIGirlPage from "@/pages/AIGirlPage";
 import AIProfilesPage from "@/pages/AIProfilesPage";
-import ToolRegistryPage from "@/pages/ToolRegistryPage";
-import AccountStrategyPage from "@/pages/AccountStrategyPage";
-import AIStudioPage from "@/pages/AIStudioPage";
 import MontagePage from "@/pages/MontagePage";
 
 const NAV_ITEMS = [
   { id: "dashboard", label: "Главная", icon: LayoutDashboard },
+  { id: "montage", label: "Монтаж", icon: Clapperboard },
   { id: "clips", label: "Клипы", icon: Film },
   { id: "trends", label: "Тренды", icon: TrendingUp },
-  { id: "ab-tests", label: "A/B Тесты", icon: FlaskConical },
-  { id: "moments", label: "Моменты", icon: Crosshair },
-  { id: "templates", label: "Шаблоны", icon: Layers },
   { id: "streams", label: "Стримы", icon: Radio },
-  { id: "ai-girl", label: "AI Девушка", icon: Sparkles },
-  { id: "ai-profiles", label: "AI Профили", icon: UserCircle },
-  { id: "tools", label: "Инструменты", icon: Wrench },
-  { id: "accounts", label: "Аккаунты и Регионы", icon: Globe },
-  { id: "studio", label: "AI Студия", icon: Wand2 },
-  { id: "montage", label: "Монтаж", icon: Clapperboard },
+  { id: "ai-profiles", label: "AI Девушки", icon: UserCircle },
 ];
 
 const PAGES: Record<string, React.FC> = {
   dashboard: Dashboard,
+  montage: MontagePage,
   clips: ClipsPage,
   trends: TrendsPage,
-  "ab-tests": ABTestsPage,
-  moments: MomentsPage,
-  templates: TemplatesPage,
   streams: StreamsPage,
-  "ai-girl": AIGirlPage,
   "ai-profiles": AIProfilesPage,
-  tools: ToolRegistryPage,
-  accounts: AccountStrategyPage,
-  studio: AIStudioPage,
-  montage: MontagePage,
 };
 
 function App() {
@@ -89,7 +67,7 @@ function App() {
 
         {/* Footer */}
         <div className="px-4 py-3 border-t border-zinc-800 text-xs text-zinc-600">
-          v2.0.0 &middot; AI CS Движок
+          v2.1.0 &middot; AI CS Движок
         </div>
       </aside>
 
