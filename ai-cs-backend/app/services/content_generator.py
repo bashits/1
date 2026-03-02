@@ -1,7 +1,9 @@
 """
 Content Generator Service
-Handles clip assembly pipeline: overlays, subtitles, zooms, sound effects, thumbnails.
-In production, this would use FFmpeg; here we simulate the pipeline.
+Handles clip assembly pipeline configuration: overlays, subtitles, zooms, sound effects, thumbnails.
+
+This module generates pipeline CONFIGURATION (JSON instructions) for the FFmpeg executor.
+Actual video processing is performed by clip_montage.py and clip_executor.py using real FFmpeg.
 """
 import json
 import random
