@@ -52,12 +52,26 @@ if not os.path.exists(FONT_PATH):
 # ─── Twitch Clip Discovery (via Twitch API) ─────────────────────────
 TWITCH_CLIENT_ID = os.environ.get("TWITCH_CLIENT_ID", "")
 TWITCH_CLIENT_SECRET = os.environ.get("TWITCH_CLIENT_SECRET", "")
+TWITCH_ACCESS_TOKEN = os.environ.get("TWITCH_ACCESS_TOKEN", "")
 _twitch_token_cache: dict = {}
 
 
 async def _get_twitch_token() -> str:
-    """Get OAuth token from Twitch API."""
-    if not TWITCH_CLIENT_ID or not TWITCH_CLIENT_SECRET:
+    """Get OAuth token from Twitch API.
+
+    Supports two modes:
+    1. Direct token: If TWITCH_ACCESS_TOKEN is set, use it directly (no client_credentials flow)
+    2. Client credentials: Use TWITCH_CLIENT_ID + TWITCH_CLIENT_SECRET to get a token
+    """
+    # Mode 1: direct access token (from purchased/pre-existing OAuth token)
+    direct_token = TWITCH_ACCESS_TOKEN or os.environ.get("TWITCH_ACCESS_TOKEN", "")
+    if direct_token:
+        return direct_token
+
+    # Mode 2: client_credentials flow
+    cid = TWITCH_CLIENT_ID or os.environ.get("TWITCH_CLIENT_ID", "")
+    csecret = TWITCH_CLIENT_SECRET or os.environ.get("TWITCH_CLIENT_SECRET", "")
+    if not cid or not csecret:
         return ""
     if _twitch_token_cache.get("token") and _twitch_token_cache.get("expires", 0) > time.time():
         return _twitch_token_cache["token"]
@@ -67,8 +81,8 @@ async def _get_twitch_token() -> str:
         resp = await client.post(
             "https://id.twitch.tv/oauth2/token",
             data={
-                "client_id": TWITCH_CLIENT_ID,
-                "client_secret": TWITCH_CLIENT_SECRET,
+                "client_id": cid,
+                "client_secret": csecret,
                 "grant_type": "client_credentials",
             },
         )

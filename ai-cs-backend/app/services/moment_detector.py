@@ -271,11 +271,12 @@ async def detect_moments(
     # Try to fetch real clips from Twitch API
     twitch_client_id = os.environ.get("TWITCH_CLIENT_ID", "")
     twitch_client_secret = os.environ.get("TWITCH_CLIENT_SECRET", "")
+    twitch_access_token = os.environ.get("TWITCH_ACCESS_TOKEN", "")
 
-    if not twitch_client_id or not twitch_client_secret:
+    if not twitch_access_token and (not twitch_client_id or not twitch_client_secret):
         logger.warning(
             "No Twitch API credentials — cannot detect real moments. "
-            "Set TWITCH_CLIENT_ID + TWITCH_CLIENT_SECRET."
+            "Set TWITCH_ACCESS_TOKEN or TWITCH_CLIENT_ID + TWITCH_CLIENT_SECRET."
         )
         return []
 

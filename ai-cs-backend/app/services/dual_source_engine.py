@@ -43,7 +43,15 @@ class DataValidator:
 
     @staticmethod
     def validate_twitch_credentials(client_id: str, client_secret: str) -> dict:
-        """Validate Twitch API credentials are present."""
+        """Validate Twitch API credentials are present.
+
+        Accepts either:
+        - TWITCH_ACCESS_TOKEN (direct OAuth token, no client_secret needed)
+        - TWITCH_CLIENT_ID + TWITCH_CLIENT_SECRET (client_credentials flow)
+        """
+        direct_token = os.environ.get("TWITCH_ACCESS_TOKEN", "")
+        if direct_token:
+            return {"valid": True, "mode": "direct_token"}
         if not client_id or not client_secret:
             return {
                 "valid": False,
@@ -54,9 +62,9 @@ class DataValidator:
                         "TWITCH_CLIENT_SECRET": client_secret,
                     }.items() if not v
                 ],
-                "remedy": "Set TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET environment variables.",
+                "remedy": "Set TWITCH_ACCESS_TOKEN or TWITCH_CLIENT_ID + TWITCH_CLIENT_SECRET.",
             }
-        return {"valid": True}
+        return {"valid": True, "mode": "client_credentials"}
 
     @staticmethod
     def validate_clip_url(url: str) -> dict:
@@ -83,8 +91,9 @@ class DataValidator:
         """Validate that required API keys are present for the chosen mode."""
         missing = []
         if mode in ("source1", "auto"):
-            if not keys.get("twitch_client_id") or not keys.get("twitch_client_secret"):
-                missing.append("TWITCH_CLIENT_ID + TWITCH_CLIENT_SECRET (required for stream/clip discovery)")
+            has_direct_token = bool(os.environ.get("TWITCH_ACCESS_TOKEN", ""))
+            if not has_direct_token and (not keys.get("twitch_client_id") or not keys.get("twitch_client_secret")):
+                missing.append("TWITCH_ACCESS_TOKEN or TWITCH_CLIENT_ID + TWITCH_CLIENT_SECRET (required for stream/clip discovery)")
         if keys.get("enable_girl"):
             if keys.get("lipsync_mode") == "paid" and not keys.get("fal_api_key"):
                 missing.append("FAL_KEY (required for paid lipsync)")

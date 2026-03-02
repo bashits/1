@@ -185,22 +185,30 @@ _KNOWN_FORMATS = {
 async def _twitch_api_streams(client_id: str, secret: str) -> list[dict]:
     """Try Twitch Helix API for CS2 streams."""
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            token_resp = await client.post(
-                "https://id.twitch.tv/oauth2/token",
-                data={
-                    "client_id": client_id,
-                    "client_secret": secret,
-                    "grant_type": "client_credentials",
-                },
-            )
-            if token_resp.status_code != 200:
-                logger.warning(f"Twitch OAuth failed: {token_resp.status_code}")
-                return []
-            token = token_resp.json().get("access_token", "")
-            if not token:
-                return []
-            resp = await client.get(
+        # Support direct access token (skip client_credentials flow)
+        direct_token = os.environ.get("TWITCH_ACCESS_TOKEN", "")
+        if direct_token:
+            token = direct_token
+            if not client_id:
+                client_id = os.environ.get("TWITCH_CLIENT_ID", "")
+        else:
+            async with httpx.AsyncClient(timeout=15.0) as hclient:
+                token_resp = await hclient.post(
+                    "https://id.twitch.tv/oauth2/token",
+                    data={
+                        "client_id": client_id,
+                        "client_secret": secret,
+                        "grant_type": "client_credentials",
+                    },
+                )
+                if token_resp.status_code != 200:
+                    logger.warning(f"Twitch OAuth failed: {token_resp.status_code}")
+                    return []
+                token = token_resp.json().get("access_token", "")
+                if not token:
+                    return []
+        async with httpx.AsyncClient(timeout=15.0) as api_client:
+            resp = await api_client.get(
                 "https://api.twitch.tv/helix/streams",
                 params={"game_id": "32399", "first": "20", "type": "live"},
                 headers={"Client-ID": client_id, "Authorization": f"Bearer {token}"},
@@ -332,8 +340,9 @@ async def scrape_twitch_cs2_streams(
         twitch_client_id = os.environ.get("TWITCH_CLIENT_ID", "")
     if not twitch_secret:
         twitch_secret = os.environ.get("TWITCH_CLIENT_SECRET", "")
+    direct_token = os.environ.get("TWITCH_ACCESS_TOKEN", "")
     streams: list[dict] = []
-    if twitch_client_id and twitch_secret:
+    if direct_token or (twitch_client_id and twitch_secret):
         streams = await _twitch_api_streams(twitch_client_id, twitch_secret)
     if not streams:
         streams = await _scrape_twitch_tracker_cs2()

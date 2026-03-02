@@ -565,6 +565,15 @@ async def init_db():
             ce.TWITCH_CLIENT_SECRET = row[0]
         except Exception:
             pass
+    cursor = await db.execute("SELECT value FROM settings WHERE key='twitch_access_token'")
+    row = await cursor.fetchone()
+    if row:
+        os.environ["TWITCH_ACCESS_TOKEN"] = row[0]
+        try:
+            import app.services.clip_executor as ce
+            ce.TWITCH_ACCESS_TOKEN = row[0]
+        except Exception:
+            pass
 
     # Seed region analysis if empty
     cursor = await db.execute("SELECT COUNT(*) as cnt FROM region_analysis")

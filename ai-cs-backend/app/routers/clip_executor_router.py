@@ -76,8 +76,9 @@ class BatchRequest(BaseModel):
 
 
 class TwitchCredentials(BaseModel):
-    client_id: str
-    client_secret: str
+    client_id: str = ""
+    client_secret: str = ""
+    access_token: str = ""  # Direct OAuth token (alternative to client_secret)
 
 
 class TwitchClipsRequest(BaseModel):
@@ -99,31 +100,45 @@ async def set_twitch_credentials(creds: TwitchCredentials):
     """Set Twitch API credentials for clip discovery."""
     import app.services.clip_executor as ce
 
-    ce.TWITCH_CLIENT_ID = creds.client_id
-    ce.TWITCH_CLIENT_SECRET = creds.client_secret
+    if creds.client_id:
+        ce.TWITCH_CLIENT_ID = creds.client_id
+        os.environ["TWITCH_CLIENT_ID"] = creds.client_id
+    if creds.client_secret:
+        ce.TWITCH_CLIENT_SECRET = creds.client_secret
+        os.environ["TWITCH_CLIENT_SECRET"] = creds.client_secret
+    if creds.access_token:
+        ce.TWITCH_ACCESS_TOKEN = creds.access_token
+        os.environ["TWITCH_ACCESS_TOKEN"] = creds.access_token
     ce._twitch_token_cache.clear()
-    os.environ["TWITCH_CLIENT_ID"] = creds.client_id
-    os.environ["TWITCH_CLIENT_SECRET"] = creds.client_secret
 
     # Persist to SQLite
     from app.database import DB_PATH
     db = await aiosqlite.connect(DB_PATH)
     try:
-        await db.execute(
-            "INSERT INTO settings (key, value, updated_at) VALUES ('twitch_client_id', ?, datetime('now')) "
-            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=datetime('now')",
-            (creds.client_id,),
-        )
-        await db.execute(
-            "INSERT INTO settings (key, value, updated_at) VALUES ('twitch_client_secret', ?, datetime('now')) "
-            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=datetime('now')",
-            (creds.client_secret,),
-        )
+        if creds.client_id:
+            await db.execute(
+                "INSERT INTO settings (key, value, updated_at) VALUES ('twitch_client_id', ?, datetime('now')) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=datetime('now')",
+                (creds.client_id,),
+            )
+        if creds.client_secret:
+            await db.execute(
+                "INSERT INTO settings (key, value, updated_at) VALUES ('twitch_client_secret', ?, datetime('now')) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=datetime('now')",
+                (creds.client_secret,),
+            )
+        if creds.access_token:
+            await db.execute(
+                "INSERT INTO settings (key, value, updated_at) VALUES ('twitch_access_token', ?, datetime('now')) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=datetime('now')",
+                (creds.access_token,),
+            )
         await db.commit()
     finally:
         await db.close()
 
-    return {"success": True, "message": "Twitch credentials saved and activated"}
+    mode = "direct_token" if creds.access_token else "client_credentials"
+    return {"success": True, "message": f"Twitch credentials saved and activated (mode: {mode})"}
 
 
 # ─── Discover Clips from Twitch ─────────────────────────────────────

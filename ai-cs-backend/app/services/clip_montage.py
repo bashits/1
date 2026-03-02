@@ -1957,30 +1957,38 @@ async def discover_trending_cs2_clips(
 
     client_id = twitch_client_id or os.environ.get("TWITCH_CLIENT_ID", "")
     client_secret = twitch_client_secret or os.environ.get("TWITCH_CLIENT_SECRET", "")
+    direct_token = os.environ.get("TWITCH_ACCESS_TOKEN", "")
 
-    if not client_id or not client_secret:
+    if not direct_token and (not client_id or not client_secret):
         return {
             "success": False,
-            "error": "Twitch API credentials required. Set TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET.",
+            "error": "Twitch API credentials required. Set TWITCH_ACCESS_TOKEN or TWITCH_CLIENT_ID + TWITCH_CLIENT_SECRET.",
             "clips": [],
         }
 
-    # Step 1: Get OAuth token
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            token_resp = await client.post(
-                "https://id.twitch.tv/oauth2/token",
-                data={
-                    "client_id": client_id,
-                    "client_secret": client_secret,
-                    "grant_type": "client_credentials",
-                },
-            )
-            if token_resp.status_code != 200:
-                return {"success": False, "error": f"Twitch OAuth failed: {token_resp.status_code}", "clips": []}
-            token = token_resp.json().get("access_token", "")
-    except Exception as e:
-        return {"success": False, "error": f"Twitch OAuth error: {e}", "clips": []}
+    # Step 1: Get OAuth token (direct or via client_credentials)
+    token = ""
+    if direct_token:
+        token = direct_token
+        # Ensure client_id is set for API headers
+        if not client_id:
+            client_id = os.environ.get("TWITCH_CLIENT_ID", "")
+    else:
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                token_resp = await client.post(
+                    "https://id.twitch.tv/oauth2/token",
+                    data={
+                        "client_id": client_id,
+                        "client_secret": client_secret,
+                        "grant_type": "client_credentials",
+                    },
+                )
+                if token_resp.status_code != 200:
+                    return {"success": False, "error": f"Twitch OAuth failed: {token_resp.status_code}", "clips": []}
+                token = token_resp.json().get("access_token", "")
+        except Exception as e:
+            return {"success": False, "error": f"Twitch OAuth error: {e}", "clips": []}
 
     headers = {
         "Client-ID": client_id,
