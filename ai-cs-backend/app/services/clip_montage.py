@@ -1529,43 +1529,83 @@ async def generate_girl_audio(
     voice: str = "jessica",
     output_name: str | None = None,
     elevenlabs_api_key: str | None = None,
+    profile_id: int | None = None,
+    db=None,
 ) -> dict:
     """
-    Generate AI girl voice.
-    Priority: ElevenLabs v3 (if API key) → edge-tts (free fallback).
-    ElevenLabs v3 uses audio tags for expressive speech.
+    Generate AI girl voice — ElevenLabs v3 ONLY (no edge-tts fallback).
+
+    If profile_id + db are provided, the voice is looked up from the
+    voice_identity table (one profile = one voice, no random selection).
+    Otherwise falls back to the voice param for backwards compatibility.
+
+    Raises RuntimeError if ELEVENLABS_API_KEY is missing.
     """
     voice_info = GIRL_VOICES.get(voice, GIRL_VOICES["jessica"])
+
+    # If profile_id provided, enforce profile-bound voice
+    if profile_id and db:
+        try:
+            cursor = await db.execute(
+                "SELECT voice_name, voice_settings FROM voice_identity WHERE profile_id = ?",
+                (profile_id,),
+            )
+            vi_row = await cursor.fetchone()
+            if vi_row:
+                bound_voice = dict(vi_row).get("voice_name", "")
+                if bound_voice:
+                    # Override voice_info with profile-bound voice
+                    for _k, _v in GIRL_VOICES.items():
+                        if _v.get("elevenlabs_id") == bound_voice or _v.get("name", "").lower() == bound_voice.lower():
+                            voice_info = _v
+                            voice = _k
+                            break
+                    else:
+                        # Use bound_voice as direct elevenlabs_id
+                        voice_info = {**voice_info, "elevenlabs_id": bound_voice}
+                    logger.info(f"Profile {profile_id}: using bound voice '{bound_voice}'")
+        except Exception as e:
+            logger.warning(f"Could not look up voice_identity for profile {profile_id}: {e}")
 
     if output_name is None:
         output_name = f"girl_tts_{uuid.uuid4().hex[:8]}"
 
     output_path = MONTAGE_DIR / "temp" / f"{output_name}.mp3"
-    srt_path = MONTAGE_DIR / "temp" / f"{output_name}.srt"
 
-    # Try ElevenLabs v3 first if API key available
+    # ElevenLabs v3 ONLY — no edge-tts fallback
     api_key = elevenlabs_api_key or os.environ.get("ELEVENLABS_API_KEY", "")
-    if api_key:
-        try:
-            result = await _generate_elevenlabs_v3(text, voice_info, api_key, str(output_path))
-            if result["success"]:
-                info = await _get_audio_duration(str(output_path))
-                return {
-                    "success": True,
-                    "audio_path": str(output_path),
-                    "srt_path": None,
-                    "duration": info.get("duration", 0),
-                    "text": text,
-                    "voice": voice,
-                    "engine": "elevenlabs_v3",
-                    "cost": result.get("cost", 0.0),
-                }
-        except Exception as e:
-            # Fall through to edge-tts
-            pass
+    if not api_key:
+        return {
+            "success": False,
+            "error": "ELEVENLABS_API_KEY not set. edge-tts fallback has been removed.",
+            "engine": "none",
+        }
 
-    # Fallback: edge-tts (FREE)
-    return await _generate_edge_tts(text, voice_info, str(output_path), str(srt_path))
+    try:
+        result = await _generate_elevenlabs_v3(text, voice_info, api_key, str(output_path))
+        if result["success"]:
+            info = await _get_audio_duration(str(output_path))
+            return {
+                "success": True,
+                "audio_path": str(output_path),
+                "srt_path": None,
+                "duration": info.get("duration", 0),
+                "text": text,
+                "voice": voice,
+                "engine": "elevenlabs_v3",
+                "cost": result.get("cost", 0.0),
+            }
+        return {
+            "success": False,
+            "error": result.get("error", "ElevenLabs generation failed"),
+            "engine": "elevenlabs_v3",
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"ElevenLabs v3 error: {e}",
+            "engine": "elevenlabs_v3",
+        }
 
 
 async def _generate_elevenlabs_v3(
@@ -1610,45 +1650,11 @@ async def _generate_elevenlabs_v3(
         return {"success": False, "error": str(e)}
 
 
-async def _generate_edge_tts(
-    text: str,
-    voice_info: dict,
-    output_path: str,
-    srt_path: str,
-) -> dict:
-    """Fallback: Generate AI girl voice using edge-tts (FREE)."""
-    import edge_tts
-
-    voice_id = voice_info.get("edge_tts_id", "en-US-JennyNeural")
-
-    try:
-        communicate = edge_tts.Communicate(text, voice_id)
-        submaker = edge_tts.SubMaker()
-        with open(output_path, "wb") as audio_file:
-            async for chunk in communicate.stream():
-                if chunk["type"] == "audio":
-                    audio_file.write(chunk["data"])
-                elif chunk["type"] == "WordBoundary":
-                    submaker.feed(chunk)
-
-        srt_content = submaker.get_srt()
-        with open(srt_path, "w") as f:
-            f.write(srt_content)
-
-        info = await _get_audio_duration(output_path)
-
-        return {
-            "success": True,
-            "audio_path": output_path,
-            "srt_path": srt_path,
-            "duration": info.get("duration", 0),
-            "text": text,
-            "voice": voice_id,
-            "engine": "edge_tts",
-            "cost": 0.0,
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+# edge-tts fallback REMOVED — ElevenLabs v3 is the only voice engine.
+# Keeping this as a stub to avoid import errors in any code that may reference it.
+async def _generate_edge_tts(*args, **kwargs) -> dict:
+    """DISABLED: edge-tts fallback removed. ElevenLabs v3 only."""
+    return {"success": False, "error": "edge-tts has been removed. Use ElevenLabs v3."}
 
 
 async def _get_audio_duration(file_path: str) -> dict:

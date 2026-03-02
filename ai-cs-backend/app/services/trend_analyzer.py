@@ -299,24 +299,13 @@ async def _scrape_twitch_tracker_cs2() -> list[dict]:
 
 
 def _get_known_cs2_streamers() -> list[dict]:
-    """Fallback: return known CS2 streamers database.
-    
-    WARNING: This is STATIC data — viewer counts are historical averages,
-    not live. The source is marked as 'known_db' so freshness gates can
-    detect and reject this data when strict mode is enabled.
+    """DISABLED: Static fallback removed per policy — live data only.
+
+    Returns empty list. The system must rely on Twitch API or TwitchTracker
+    scraping for real-time data. No static/template data allowed.
     """
-    logger.info("Using known CS2 streamers database (fallback — NOT live data)")
-    streamers = []
-    for s in _KNOWN_CS2_STREAMERS:
-        streamers.append({
-            "name": s["name"],
-            "viewers": s["viewers"],  # Static historical average, NOT live
-            "title": s["title"],
-            "language": s["language"],
-            "source": "known_db",
-            "is_live": False,  # We don't know — mark as not live
-        })
-    return streamers
+    logger.info("Static CS2 streamer fallback DISABLED — live data only")
+    return []
 
 
 async def scrape_twitch_cs2_streams(
@@ -347,8 +336,8 @@ async def scrape_twitch_cs2_streams(
         streams = await _twitch_api_streams(twitch_client_id, twitch_secret)
     if not streams:
         streams = await _scrape_twitch_tracker_cs2()
-    if not streams:
-        streams = _get_known_cs2_streamers()
+    # Static fallback removed — if API + TwitchTracker both fail, return empty.
+    # No template/static data allowed in the pipeline.
     if streams:
         fetched_at = datetime.utcnow().isoformat()
         for s in streams:

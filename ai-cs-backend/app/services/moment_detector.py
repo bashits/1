@@ -26,6 +26,7 @@ import json
 import logging
 import math
 from datetime import datetime, timezone
+from typing import Optional
 
 logger = logging.getLogger("moment_detector")
 
@@ -86,9 +87,62 @@ def detect_moment_type(title: str) -> str:
     return "insane_play"
 
 
-def score_clip(clip: dict) -> dict:
+# ─── Trend factor mapping: which trend types boost which moment types ───
+# Maps trend format names (from trend_analyzer) to moment types they boost.
+_TREND_MOMENT_BOOST: dict[str, list[str]] = {
+    "sigma_edit": ["ace", "clutch", "insane_play", "knife_kill"],
+    "highlight_react": ["emotional_reaction", "insane_play", "multi_kill", "ace"],
+    "pro_clutch": ["clutch", "ace", "wallbang"],
+    "funny_moments": ["meme_fail", "toxic_moment", "emotional_reaction"],
+    "ace_compilation": ["ace", "multi_kill", "headshot_sequence"],
+    "tutorial_tip": ["insane_spray", "wallbang", "headshot_sequence"],
+}
+
+
+def _compute_trend_factor(
+    moment_type: str, trend_data: Optional[list[dict]] = None
+) -> float:
+    """Compute trend factor (0.0–0.30) for a moment type based on last-24h trends.
+
+    This is the DETERMINING FACTOR — it has the highest single weight in the
+    final composite score so that trending content types float to the top.
+
+    Logic:
+    1. Look at each active trend from the last 24h.
+    2. If the trend's format boosts this moment_type, accumulate score.
+    3. Normalize to 0.0–0.30 range (capped).
+
+    Returns 0.0 when no trend data is available (never blocks scoring).
     """
-    Score a real Twitch clip deterministically using concrete signals.
+    if not trend_data:
+        return 0.0
+
+    raw = 0.0
+    for trend in trend_data:
+        trend_type = trend.get("trend_type", "")
+        fmt = trend.get("metadata", {}).get("format", "") if isinstance(trend.get("metadata"), dict) else ""
+        trend_score = float(trend.get("score", 0))
+
+        # Direct match: trend title mentions moment type keyword
+        title_lower = trend.get("title", "").lower()
+        for kw in TYPE_KEYWORDS.get(moment_type, []):
+            if kw in title_lower:
+                raw += trend_score * 0.04
+                break
+
+        # Format-based match: trending format boosts certain moment types
+        boosted_types = _TREND_MOMENT_BOOST.get(fmt, [])
+        if moment_type in boosted_types:
+            raw += trend_score * 0.03
+
+    # Cap at 0.30 — this is the highest single component weight
+    return round(min(0.30, raw), 4)
+
+
+def score_clip(clip: dict, trend_data: Optional[list[dict]] = None) -> dict:
+    """
+    Score a real Twitch clip deterministically using concrete signals
+    PLUS 24h trend data as the determining factor.
 
     Input clip dict should have:
     - title: str
@@ -97,6 +151,9 @@ def score_clip(clip: dict) -> dict:
     - broadcaster_name: str
     - broadcaster_viewers: int (optional, stream viewer count at time of clip)
     - created_at: str (ISO timestamp)
+
+    trend_data: list of trend dicts from the trends table (last 24h).
+    When provided, the trend_factor becomes the highest-weight component.
 
     Returns scored moment dict with full breakdown. No randomness.
     """
@@ -110,25 +167,24 @@ def score_clip(clip: dict) -> dict:
     moment_type = detect_moment_type(title)
     scoring = MOMENT_SCORING.get(moment_type, MOMENT_SCORING["insane_play"])
 
-    # 2. View score — log10 scale, 0 to 0.4
-    # 1 view = 0, 100 views ≈ 0.16, 1K ≈ 0.24, 10K ≈ 0.32, 100K ≈ 0.4
-    view_score = min(0.4, math.log10(max(views, 1)) / 12.5)
+    # 2. View score — log10 scale, 0 to 0.25
+    view_score = min(0.25, math.log10(max(views, 1)) / 20.0)
 
-    # 3. Duration score — 10-35s is ideal for reels
+    # 3. Duration score — 10-35s is ideal for reels, 0 to 0.10
     if 10 <= duration <= 35:
-        duration_score = 0.2
+        duration_score = 0.10
     elif 5 <= duration <= 60:
-        duration_score = 0.12
+        duration_score = 0.06
     else:
-        duration_score = 0.05
+        duration_score = 0.03
 
-    # 4. Broadcaster popularity — real viewer count signal
-    broadcaster_score = min(0.15, broadcaster_viewers / 100_000) if broadcaster_viewers else 0.0
+    # 4. Broadcaster popularity — real viewer count signal, 0 to 0.10
+    broadcaster_score = min(0.10, broadcaster_viewers / 150_000) if broadcaster_viewers else 0.0
 
-    # 5. Moment type base score (deterministic, from MOMENT_SCORING)
+    # 5. Moment type base score (deterministic, from MOMENT_SCORING), 0 to ~0.23
     type_score = scoring["base"] * 0.25
 
-    # 6. Recency bonus — newer clips get a small boost
+    # 6. Recency bonus — newer clips get a small boost, 0 to 0.05
     recency_bonus = 0.0
     if created_at:
         try:
@@ -136,13 +192,19 @@ def score_clip(clip: dict) -> dict:
                 tzinfo=timezone.utc
             )
             hours_ago = (datetime.now(timezone.utc) - created).total_seconds() / 3600
-            # Full bonus for <6h, linear decay to 0 at 168h (7 days)
             recency_bonus = max(0.0, min(0.05, 0.05 * (1.0 - hours_ago / 168)))
         except (ValueError, TypeError):
             pass
 
-    # Composite score — sum of all real signals
-    composite = view_score + duration_score + broadcaster_score + type_score + recency_bonus
+    # 7. TREND FACTOR — the DETERMINING FACTOR (highest weight: 0 to 0.30)
+    #    Uses actual 24h trend analytics to boost moments matching current trends.
+    trend_factor = _compute_trend_factor(moment_type, trend_data)
+
+    # Composite score — sum of all signals (trend_factor is the biggest component)
+    composite = (
+        view_score + duration_score + broadcaster_score
+        + type_score + recency_bonus + trend_factor
+    )
 
     # Viral multiplier for clips with >10k views
     if views > 10_000:
@@ -160,18 +222,27 @@ def score_clip(clip: dict) -> dict:
             "broadcaster_score": round(broadcaster_score, 4),
             "type_score": round(type_score, 4),
             "recency_bonus": round(recency_bonus, 4),
+            "trend_factor": trend_factor,
         },
+        "trend_boosted": trend_factor > 0,
         "detected_type_label": scoring.get("label", moment_type),
         "clip_priority": scoring.get("clip_priority", 99),
         "data_source": "real_clip",
     }
 
 
-def rank_clips(clips: list[dict]) -> list[dict]:
-    """Rank a list of real Twitch clips by score. Fully deterministic."""
+def rank_clips(
+    clips: list[dict], trend_data: Optional[list[dict]] = None
+) -> list[dict]:
+    """Rank a list of real Twitch clips by score. Fully deterministic.
+
+    When trend_data is provided (last 24h trends), the trend_factor becomes
+    the highest-weight component in scoring — moments matching current trends
+    float to the top.
+    """
     if not clips:
         return []
-    scored = [score_clip(c) for c in clips]
+    scored = [score_clip(c, trend_data=trend_data) for c in clips]
     scored.sort(key=lambda m: m["score"], reverse=True)
     return scored
 
@@ -189,7 +260,28 @@ async def detect_moments_from_clips(
     if not clips:
         return []
 
-    ranked = rank_clips(clips)
+    # Fetch last 24h trend data from DB to use as determining factor
+    trend_data: list[dict] = []
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM trends WHERE is_active = 1 "
+            "AND created_at >= datetime('now', '-24 hours') "
+            "ORDER BY score DESC LIMIT 50"
+        )
+        rows = await cursor.fetchall()
+        for row in rows:
+            d = dict(row)
+            if isinstance(d.get("metadata"), str):
+                try:
+                    d["metadata"] = json.loads(d["metadata"])
+                except (json.JSONDecodeError, TypeError):
+                    d["metadata"] = {}
+            trend_data.append(d)
+        logger.info(f"Loaded {len(trend_data)} trends for moment ranking")
+    except Exception as e:
+        logger.warning(f"Could not load trend data for ranking: {e}")
+
+    ranked = rank_clips(clips, trend_data=trend_data)
 
     for moment in ranked:
         clip = moment["clip"]
@@ -217,6 +309,7 @@ async def detect_moments_from_clips(
                         "moment_label": moment["detected_type_label"],
                         "clip_priority": moment["clip_priority"],
                         "score_breakdown": moment["breakdown"],
+                        "trend_boosted": moment.get("trend_boosted", False),
                         "data_source": "real_clip",
                     }),
                 ),
@@ -297,8 +390,28 @@ async def detect_moments(
         logger.info(f"No clips found for CS2 streams in last 24h")
         return []
 
-    # Score real clips deterministically
-    ranked = rank_clips(clips)
+    # Fetch last 24h trend data for trend-based ranking
+    trend_data: list[dict] = []
+    try:
+        trend_cursor = await db.execute(
+            "SELECT * FROM trends WHERE is_active = 1 "
+            "AND created_at >= datetime('now', '-24 hours') "
+            "ORDER BY score DESC LIMIT 50"
+        )
+        trend_rows = await trend_cursor.fetchall()
+        for row in trend_rows:
+            d = dict(row)
+            if isinstance(d.get("metadata"), str):
+                try:
+                    d["metadata"] = json.loads(d["metadata"])
+                except (json.JSONDecodeError, TypeError):
+                    d["metadata"] = {}
+            trend_data.append(d)
+    except Exception as e:
+        logger.warning(f"Could not load trend data: {e}")
+
+    # Score real clips deterministically (with trend factor as determining factor)
+    ranked = rank_clips(clips, trend_data=trend_data)
 
     # Filter by sensitivity threshold
     min_score = (1.0 - sensitivity) * 0.3

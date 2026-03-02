@@ -1159,6 +1159,43 @@ async def update_template_weights(db) -> dict:
         return {"updated": 0, "error": str(e)}
 
 
+def adapt_weights_from_ab_result(
+    winner_format: str,
+    loser_formats: list[str],
+    margin: float = 0.0,
+) -> dict:
+    """Synchronous weight adaptation after A/B test completion.
+
+    Boosts the winner format's trend_score and lowers losers' scores
+    in the in-memory FORMAT_CONFIGS. Changes persist until restart;
+    the async update_template_weights() persists to DB.
+
+    Args:
+        winner_format: format_type of the winning clip
+        loser_formats: format_types of losing clips
+        margin: score difference (used to scale adjustment)
+
+    Returns dict with old/new scores for each adjusted format.
+    """
+    adjustments: dict[str, dict] = {}
+    boost = min(0.05, max(0.01, margin * 0.02))
+
+    if winner_format in FORMAT_CONFIGS:
+        old = FORMAT_CONFIGS[winner_format].get("trend_score", 0.5)
+        new = min(1.0, old + boost)
+        FORMAT_CONFIGS[winner_format]["trend_score"] = round(new, 3)
+        adjustments[winner_format] = {"old": old, "new": round(new, 3), "role": "winner"}
+
+    for fmt in loser_formats:
+        if fmt in FORMAT_CONFIGS:
+            old = FORMAT_CONFIGS[fmt].get("trend_score", 0.5)
+            new = max(0.1, old - boost * 0.5)
+            FORMAT_CONFIGS[fmt]["trend_score"] = round(new, 3)
+            adjustments[fmt] = {"old": old, "new": round(new, 3), "role": "loser"}
+
+    return adjustments
+
+
 def get_format_configs() -> dict:
     """Return all available format configurations."""
     return FORMAT_CONFIGS

@@ -5,6 +5,8 @@ for optimal account strategy (which SIM to buy, which region to target).
 """
 
 import json
+import logging
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 import aiosqlite
 from app.database import get_db
@@ -15,6 +17,8 @@ from app.models.schemas import (
     RegionAnalysisResponse,
 )
 from app.services.ai_profile_generator import REGION_ANALYSIS_DATA
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
 
@@ -154,6 +158,151 @@ async def list_regions(
         d["top_content_types"] = json.loads(d["top_content_types"]) if isinstance(d["top_content_types"], str) else d["top_content_types"]
         result.append(d)
     return result
+
+
+@router.post("/regions/refresh")
+async def refresh_region_analysis(
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Collect live data from Twitch/YouTube and refresh region_analysis table.
+
+    Scrapes current viewer counts per region from Twitch CS2 streams,
+    estimates competition and growth potential, and updates the DB.
+    Returns a simple recommendation table: where to post now.
+    """
+    from app.services.trend_analyzer import scrape_twitch_cs2_streams, scrape_youtube_cs2_trending
+
+    # Collect live data
+    twitch_streams = await scrape_twitch_cs2_streams()
+    youtube_videos = await scrape_youtube_cs2_trending()
+
+    # Aggregate viewers per language/region from live Twitch data
+    lang_viewers: dict[str, int] = {}
+    lang_streams: dict[str, int] = {}
+    for s in twitch_streams:
+        lang = s.get("language", "en")
+        lang_viewers[lang] = lang_viewers.get(lang, 0) + s.get("viewers", 0)
+        lang_streams[lang] = lang_streams.get(lang, 0) + 1
+
+    # Map languages to regions
+    LANG_REGION = {
+        "en": ("Global EN", ["en"], ["highlights", "reactions", "memes"]),
+        "ru": ("CIS/Russia", ["ru", "en"], ["highlights", "clutch_edits"]),
+        "pt": ("Brazil/LATAM", ["pt", "es"], ["highlights", "reactions", "memes"]),
+        "tr": ("Turkey/MENA", ["tr", "en"], ["highlights", "dramatic_clutch"]),
+        "de": ("Western Europe", ["de", "en"], ["highlights", "fragmovies"]),
+        "fr": ("Western Europe", ["fr", "en"], ["highlights", "reactions"]),
+        "es": ("LATAM/Spain", ["es", "pt"], ["highlights", "memes", "reactions"]),
+        "ko": ("South Korea", ["ko", "en"], ["highlights", "pro_plays"]),
+        "ja": ("Japan", ["ja", "en"], ["highlights", "reactions"]),
+        "zh": ("China/SEA", ["zh", "en"], ["highlights", "pro_plays"]),
+    }
+
+    # Build region analysis from live data
+    regions_data: dict[str, dict] = {}
+    for lang, viewers in lang_viewers.items():
+        region_name, top_langs, content_types = LANG_REGION.get(
+            lang, (f"Other ({lang})", [lang], ["highlights"])
+        )
+        if region_name not in regions_data:
+            regions_data[region_name] = {
+                "audience_size": 0,
+                "stream_count": 0,
+                "top_languages": top_langs,
+                "top_content_types": content_types,
+            }
+        regions_data[region_name]["audience_size"] += viewers
+        regions_data[region_name]["stream_count"] += lang_streams.get(lang, 0)
+
+    # Calculate competition & growth potential
+    total_viewers = max(sum(r["audience_size"] for r in regions_data.values()), 1)
+    youtube_count = len(youtube_videos)
+
+    now = datetime.utcnow().isoformat()
+    updated_regions = []
+
+    for region_name, data in regions_data.items():
+        audience = data["audience_size"]
+        streams = data["stream_count"]
+        share = audience / total_viewers
+
+        # Competition: more streams = higher competition
+        if streams >= 8:
+            competition = "high"
+        elif streams >= 3:
+            competition = "medium"
+        else:
+            competition = "low"
+
+        # Growth potential: high audience + low competition = high potential
+        if competition == "low" and audience > 1000:
+            growth = round(min(1.0, 0.7 + share * 2), 2)
+        elif competition == "medium":
+            growth = round(min(1.0, 0.4 + share), 2)
+        else:
+            growth = round(min(1.0, 0.2 + share * 0.5), 2)
+
+        avg_views = int(audience / max(streams, 1) * 0.15)  # estimated reel views
+
+        # Recommendation text
+        if growth >= 0.7:
+            rec = f"РЕКОМЕНДУЕМ — высокий потенциал роста, {'низкая' if competition == 'low' else 'средняя'} конкуренция"
+        elif growth >= 0.4:
+            rec = f"Можно пробовать — средний потенциал, {competition} конкуренция"
+        else:
+            rec = f"Осторожно — {'высокая' if competition == 'high' else competition} конкуренция, рост медленный"
+
+        # Upsert into DB
+        for platform in ["instagram", "youtube_shorts"]:
+            await db.execute(
+                """INSERT INTO region_analysis
+                   (region, platform, audience_size, competition_level,
+                    avg_views_per_reel, top_languages, top_content_types,
+                    growth_potential, recommendation, analyzed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(region, platform) DO UPDATE SET
+                    audience_size = excluded.audience_size,
+                    competition_level = excluded.competition_level,
+                    avg_views_per_reel = excluded.avg_views_per_reel,
+                    growth_potential = excluded.growth_potential,
+                    recommendation = excluded.recommendation,
+                    analyzed_at = excluded.analyzed_at""",
+                (
+                    region_name, platform, audience, competition,
+                    avg_views, json.dumps(data["top_languages"]),
+                    json.dumps(data["top_content_types"]),
+                    growth, rec, now,
+                ),
+            )
+
+        updated_regions.append({
+            "region": region_name,
+            "audience_size": audience,
+            "competition": competition,
+            "growth_potential": growth,
+            "avg_views_per_reel": avg_views,
+            "recommendation": rec,
+        })
+
+    await db.commit()
+
+    # Sort by growth potential descending
+    updated_regions.sort(key=lambda r: r["growth_potential"], reverse=True)
+
+    return {
+        "refreshed": True,
+        "analyzed_at": now,
+        "data_sources": {
+            "twitch_streams": len(twitch_streams),
+            "youtube_videos": youtube_count,
+            "twitch_source": twitch_streams[0].get("source", "none") if twitch_streams else "none",
+        },
+        "regions": updated_regions,
+        "recommendation_table": {
+            "best_to_post_now": updated_regions[:3] if updated_regions else [],
+            "total_regions_analyzed": len(updated_regions),
+        },
+    }
 
 
 @router.get("/regions/recommendations")

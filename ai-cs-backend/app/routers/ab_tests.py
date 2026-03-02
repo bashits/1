@@ -1,9 +1,31 @@
+"""A/B Testing Router.
+
+Purpose: Test multiple clip format variants from the SAME moment to find
+which format performs best (highest retention, CTR, watch-through).
+
+Workflow:
+1. Create test from a moment_id → auto-generates 2-3 format variants
+   (e.g. girl_reaction_pip vs sigma_edit vs clean_highlight)
+2. Publish all variants to the same audience segment
+3. Submit metrics for each variant as they come in
+4. When all variants have results → auto-determine winner by composite score
+5. Winner's format gets weight boost in template_engine for future clips
+
+Integration:
+- Moments → A/B test creates variants from the same moment
+- Template engine → generates format variants + adapts weights on completion
+- Clips → each variant is a separate clip linked to the test
+- Analytics → metrics submitted per clip, winner chosen automatically
+"""
 import json
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 import aiosqlite
 from app.database import get_db
 from app.models.schemas import ABTestCreate, ABTestResultSubmit, ABTestResponse
-from app.services.template_engine import generate_ab_variants
+from app.services.template_engine import generate_ab_variants, adapt_weights_from_ab_result
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ab-tests", tags=["ab-tests"])
 
@@ -165,5 +187,32 @@ async def submit_results(
             response["test_completed"] = True
             response["winner_clip_id"] = best_clip["id"]
             response["winner_format"] = best_clip["format_type"]
+            response["winner_score"] = round(best_score, 4)
+
+            # Auto-adapt template weights: boost winner format, lower losers
+            winner_format = best_clip["format_type"]
+            loser_formats = [
+                dict(c)["format_type"]
+                for c in published_clips
+                if dict(c)["id"] != best_clip["id"]
+            ]
+            try:
+                weight_updates = adapt_weights_from_ab_result(
+                    winner_format=winner_format,
+                    loser_formats=loser_formats,
+                    margin=round(best_score - min(
+                        clip["retention_rate"] * 0.35 + clip["ctr"] * 0.25
+                        + clip["watch_through_rate"] * 0.25
+                        + (clip["comments"] / max(clip["views"], 1)) * 100 * 0.15
+                        for clip in published_clips
+                    ), 4),
+                )
+                response["weight_adaptation"] = weight_updates
+                logger.info(
+                    f"A/B test {test_id} completed: winner={winner_format}, "
+                    f"weights adapted: {weight_updates}"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to adapt template weights: {e}")
 
     return response

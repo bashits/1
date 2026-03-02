@@ -386,7 +386,8 @@ async def init_db():
         top_content_types TEXT NOT NULL DEFAULT '[]',
         growth_potential REAL NOT NULL DEFAULT 0.0,
         recommendation TEXT,
-        analyzed_at TEXT NOT NULL DEFAULT (datetime('now'))
+        analyzed_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(region, platform)
     );
     """)
 
