@@ -917,7 +917,7 @@ async def generate_video(
     if not audio_url:
         return {"success": False, "error": "Failed to upload audio for lip-sync"}
 
-    requested_duration = float(req.duration_seconds) if req.duration_seconds else None
+    requested_duration = float(req.duration_seconds) if req.duration_seconds is not None else None
     if requested_duration is not None:
         allowed = {float(d) for d in VIDEO_DURATION_OPTIONS}
         if requested_duration not in allowed:

@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 import os
 
 from app.database import init_db
-from app.routers import streams, moments, templates, clips, ab_tests, trends, analytics_router, ai_girl, ai_profiles, tool_registry, accounts, generation, clip_executor_router, montage_router
+from app.routers import streams, moments, templates, clips, ab_tests, trends, analytics_router, ai_girl, ai_profiles, tool_registry, accounts, generation, clip_executor_router, montage_router, pipeline_router
 
 
 @asynccontextmanager
@@ -48,6 +48,7 @@ app.include_router(accounts.router)
 app.include_router(generation.router)
 app.include_router(clip_executor_router.router)
 app.include_router(montage_router.router)
+app.include_router(pipeline_router.router)
 
 # Serve static files (demo reels, generated content)
 static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
