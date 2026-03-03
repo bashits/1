@@ -14,7 +14,6 @@ import {
   VideoGenResult,
   PhotoResult,
   GalleryPhoto,
-  VideoCostEstimate,
   VoiceIdentity,
   ProfileLearningResponse,
   GeneratedPersona,
@@ -72,9 +71,7 @@ export default function AIProfilesPage() {
   );
   const [videoLoading, setVideoLoading] = useState(false);
   const [videoResult, setVideoResult] = useState<VideoGenResult | null>(null);
-  const [videoDuration, setVideoDuration] = useState<number>(3);
-  const [videoLipsyncModel, setVideoLipsyncModel] = useState("omnihuman");
-  const [videoCostEstimate, setVideoCostEstimate] = useState<VideoCostEstimate | null>(null);
+  // Video generation is RunPod-only now (no fal.ai, no LoRA needed)
 
   // Photo generation state
   const [photoPrompt, setPhotoPrompt] = useState("");
@@ -272,8 +269,6 @@ export default function AIProfilesPage() {
       const res = await api.generateProfileVideo(selected.id, {
         text: videoText,
         moment_type: momentType,
-        duration_seconds: videoDuration,
-        lipsync_model_key: videoLipsyncModel,
       });
       setVideoResult(res);
     } catch (e) {
@@ -282,16 +277,6 @@ export default function AIProfilesPage() {
     setVideoLoading(false);
   };
 
-  const fetchVideoCostEstimate = async (dur: number, lsModel: string) => {
-    try {
-      const est = await api.getVideoCostEstimate({
-        duration_seconds: dur,
-        lipsync_model_key: lsModel,
-        voice_engine: "elevenlabs",
-      });
-      setVideoCostEstimate(est);
-    } catch { /* ignore */ }
-  };
 
   const handleGeneratePhoto = async () => {
     if (!selected) return;
@@ -726,10 +711,6 @@ export default function AIProfilesPage() {
                   scriptPreview={scriptPreview}
                   videoText={videoText} setVideoText={setVideoText}
                   videoLoading={videoLoading} videoResult={videoResult}
-                  videoDuration={videoDuration} setVideoDuration={setVideoDuration}
-                  videoLipsyncModel={videoLipsyncModel} setVideoLipsyncModel={setVideoLipsyncModel}
-                  videoCostEstimate={videoCostEstimate}
-                  onVideoCostEstimate={fetchVideoCostEstimate}
                   photoPrompt={photoPrompt} setPhotoPrompt={setPhotoPrompt}
                   photoContentType={photoContentType} setPhotoContentType={setPhotoContentType}
                   photoModel={photoModel} setPhotoModel={setPhotoModel}
@@ -1008,27 +989,12 @@ const PHOTO_MODELS = [
   { id: "flux2_pro", label: "FLUX 2 Pro (качество, $0.05)", cost: 0.05 },
 ];
 
-const VIDEO_DURATION_OPTIONS = [
-  { value: 3, label: "3s", desc: "Быстро" },
-  { value: 5, label: "5s", desc: "Стандарт" },
-  { value: 10, label: "10s", desc: "Длинный" },
-  { value: 15, label: "15s", desc: "Макс" },
-];
-
-const LIPSYNC_MODELS_UI = [
-  { id: "runpod_latentsync", label: "LatentSync 1.6 RunPod (15-50x дешевле!)", quality: 8, engine: "runpod", cost: "~$0.009/3с" },
-  { id: "omnihuman", label: "OmniHuman-1 (топ качество, fal.ai)", quality: 10, engine: "fal.ai", cost: "~$0.48/3с" },
-  { id: "kling_avatar", label: "Kling Avatar (быстро, fal.ai)", quality: 7, engine: "fal.ai", cost: "~$0.35/3с" },
-  { id: "latentsync", label: "LatentSync fal.ai (бюджет)", quality: 6, engine: "fal.ai", cost: "$0.20 flat" },
-];
 
 function GenerateTab({
   selected,
   voiceText, setVoiceText, momentType, setMomentType,
   voiceLoading, voiceResult, scriptPreview,
   videoText, setVideoText, videoLoading, videoResult,
-  videoDuration, setVideoDuration, videoLipsyncModel, setVideoLipsyncModel,
-  videoCostEstimate, onVideoCostEstimate,
   photoPrompt, setPhotoPrompt, photoContentType, setPhotoContentType,
   photoModel, setPhotoModel, photoUseRef, setPhotoUseRef,
   photoSetRef, setPhotoSetRef, photoLoading, photoResult,
@@ -1041,10 +1007,6 @@ function GenerateTab({
   scriptPreview: ScriptPreview | null;
   videoText: string; setVideoText: (v: string) => void;
   videoLoading: boolean; videoResult: VideoGenResult | null;
-  videoDuration: number; setVideoDuration: (v: number) => void;
-  videoLipsyncModel: string; setVideoLipsyncModel: (v: string) => void;
-  videoCostEstimate: VideoCostEstimate | null;
-  onVideoCostEstimate: (dur: number, lsModel: string) => void;
   photoPrompt: string; setPhotoPrompt: (v: string) => void;
   photoContentType: string; setPhotoContentType: (v: string) => void;
   photoModel: string; setPhotoModel: (v: string) => void;
@@ -1334,10 +1296,10 @@ function GenerateTab({
         </div>
       </div>
 
-      {/* ===== VIDEO GENERATION ===== */}
+      {/* ===== VIDEO GENERATION (RunPod LatentSync 1.6) ===== */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
         <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-          <Video className="h-5 w-5 text-violet-400" /> Генерация видео (LoRA + Голос + Lip-sync)
+          <Video className="h-5 w-5 text-violet-400" /> Генерация видео (RunPod LatentSync 1.6)
         </h3>
         <div className="space-y-3">
           <textarea
@@ -1345,117 +1307,36 @@ function GenerateTab({
             onChange={(e) => setVideoText(e.target.value)}
             className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
             rows={2}
+            placeholder="Текст для озвучки — длительность видео = длительность речи"
           />
 
-          {/* Duration picker */}
-          <div>
-            <label className="text-xs text-zinc-400 mb-1 block">Длительность видео</label>
-            <div className="grid grid-cols-4 gap-2">
-              {VIDEO_DURATION_OPTIONS.map((d) => (
-                <button
-                  key={d.value}
-                  onClick={() => {
-                    setVideoDuration(d.value);
-                    onVideoCostEstimate(d.value, videoLipsyncModel);
-                  }}
-                  className={`px-3 py-2 rounded-lg text-xs font-medium transition-all text-center ${
-                    videoDuration === d.value
-                      ? "bg-violet-600 text-white ring-1 ring-violet-400"
-                      : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
-                  }`}
-                >
-                  <div className="text-sm font-bold">{d.label}</div>
-                  <div className="text-[10px] opacity-70">{d.desc}</div>
-                </button>
-              ))}
-            </div>
+          {/* Pipeline info */}
+          <div className="bg-gradient-to-r from-emerald-500/10 to-cyan-500/10 border border-emerald-500/20 rounded-lg p-3">
+            <p className="text-xs text-emerald-400 font-semibold mb-1">RunPod Serverless — LatentSync 1.6</p>
+            <p className="text-[10px] text-zinc-400">
+              edge-tts голос (FREE) + Pexels базовое видео (FREE) + LatentSync 1.6 lip-sync (~$0.009/3с GPU).
+              Длительность видео = длительность озвучки текста.
+            </p>
           </div>
 
-          {/* Lipsync model selector */}
-          <div>
-            <label className="text-xs text-zinc-400 mb-1 block">Lip-sync модель</label>
-            <select
-              value={videoLipsyncModel}
-              onChange={(e) => {
-                setVideoLipsyncModel(e.target.value);
-                onVideoCostEstimate(videoDuration, e.target.value);
-              }}
-              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
-            >
-              {LIPSYNC_MODELS_UI.map((m) => (
-                <option key={m.id} value={m.id}>{m.label} ({m.cost})</option>
-              ))}
-            </select>
-            {videoLipsyncModel === "runpod_latentsync" && (
-              <div className="mt-2 bg-gradient-to-r from-emerald-500/10 to-cyan-500/10 border border-emerald-500/20 rounded-lg p-3">
-                <p className="text-xs text-emerald-400 font-semibold mb-1">RunPod Serverless — LatentSync 1.6</p>
-                <p className="text-[10px] text-zinc-400">
-                  15-50x дешевле fal.ai! Бесплатный TTS (edge-tts) + бесплатное базовое видео (Pexels) + GPU по секундам.
-                  Требует RUNPOD_API_KEY + endpoint.
-                </p>
-              </div>
-            )}
-          </div>
-
-          {/* Cost estimate */}
-          {videoCostEstimate && (
-            <div className="bg-zinc-800/60 border border-violet-500/20 rounded-lg p-3 space-y-1">
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-zinc-400 flex items-center gap-1">
-                  <DollarSign className="h-3 w-3" /> Предварительная стоимость
-                </span>
-                <span className="text-sm font-bold text-violet-300">
-                  ~${videoCostEstimate.total_estimated.toFixed(4)}
-                </span>
-              </div>
-              <div className="flex flex-wrap gap-2 text-[10px] text-zinc-500">
-                <span>Фото: ${videoCostEstimate.breakdown.photo.cost.toFixed(3)}</span>
-                <span>Голос: ${videoCostEstimate.breakdown.voice.cost.toFixed(4)}</span>
-                <span>Lip-sync: ${videoCostEstimate.breakdown.lipsync.cost.toFixed(4)}</span>
-                {videoCostEstimate.breakdown.i2v.included && (
-                  <span>I2V: ${videoCostEstimate.breakdown.i2v.cost.toFixed(4)}</span>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Video button — RunPod doesn't need LoRA, fal.ai does */}
-          {videoLipsyncModel !== "runpod_latentsync" && selected?.lora_training_status !== "trained" ? (
-            <div className="w-full bg-zinc-800 border border-amber-500/30 px-4 py-3 rounded-lg text-center">
-              <p className="text-sm text-amber-400 font-medium mb-1">
-                Видео заблокировано — сначала обучите LoRA
-              </p>
-              <p className="text-xs text-zinc-400">
-                {selected?.lora_training_status === "training" || selected?.lora_training_status === "sourcing_photos"
-                  ? "Обучение уже идёт... Подождите 5-15 минут."
-                  : "Перейдите в таб 'Обзор' и нажмите 'Обучить LoRA на реальных фото' (или используйте RunPod LatentSync)"}
-              </p>
-            </div>
-          ) : (
-            <button
-              onClick={onVideo}
-              disabled={videoLoading}
-              className="w-full bg-violet-600 hover:bg-violet-700 disabled:opacity-50 px-4 py-3 rounded-lg text-sm font-medium flex items-center justify-center gap-2 transition-all"
-            >
-              {videoLoading ? (
-                <>
-                  <RefreshCw className="h-4 w-4 animate-spin" /> Генерация (~30сек)...
-                </>
-              ) : (
-                <>
-                  <Zap className="h-4 w-4" /> Сгенерировать видео ({videoDuration}с{videoCostEstimate ? ` ~$${videoCostEstimate.total_estimated.toFixed(3)}` : ""})
-                </>
-              )}
-            </button>
-          )}
-          <p className="text-xs text-zinc-500">
-            {videoLipsyncModel === "runpod_latentsync" ? (
-              <span className="text-emerald-400">RunPod: Pexels видео → edge-tts голос (FREE) → LatentSync 1.6 (~$0.009/3с)</span>
-            ) : selected?.lora_training_status === "trained" ? (
-              <span className="text-green-400">LoRA → ElevenLabs v3 голос → fal.ai LoRA фото → {LIPSYNC_MODELS_UI.find(m => m.id === videoLipsyncModel)?.label || "Lip-sync"}</span>
+          {/* Generate button — always available, no LoRA needed */}
+          <button
+            onClick={onVideo}
+            disabled={videoLoading}
+            className="w-full bg-violet-600 hover:bg-violet-700 disabled:opacity-50 px-4 py-3 rounded-lg text-sm font-medium flex items-center justify-center gap-2 transition-all"
+          >
+            {videoLoading ? (
+              <>
+                <RefreshCw className="h-4 w-4 animate-spin" /> Генерация (~30сек)...
+              </>
             ) : (
-              <span className="text-amber-400">LoRA не обучена — видео недоступно</span>
+              <>
+                <Zap className="h-4 w-4" /> Сгенерировать видео (~$0.009/3с)
+              </>
             )}
+          </button>
+          <p className="text-xs text-emerald-400">
+            Pexels видео + edge-tts голос (FREE) + LatentSync 1.6 lip-sync (RunPod)
           </p>
 
           {videoResult && (

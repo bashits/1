@@ -1030,44 +1030,29 @@ async def generate_video_from_image(
 # ─── Full Smart Pipeline ──────────────────────────────────────────
 async def run_full_pipeline(
     text: str,
-    photo_prompt: Optional[str] = None,
-    content_type: str = "gaming_reaction",
     appearance: Optional[dict] = None,
-    voice_id: str = "en_female_cheerful",
-    face_image_url: Optional[str] = None,
-    reference_images: Optional[list[str]] = None,
-    quality: str = "maximum",
-    lipsync_model_key: str = "omnihuman",
-    photo_model_key: str = "flux2_realism",
-    generate_i2v: bool = False,
+    voice_id: str = "jessica_fire",
     base_video_url: Optional[str] = None,
-    voice_engine: str = "edge_tts",
     moment_type: str = "generic",
 ) -> dict:
-    """Run the complete smart generation pipeline:
+    """Run the RunPod LatentSync 1.6 generation pipeline.
 
-    Path A (fal.ai — existing):
-      1. Build smart prompt → 2. TTS → 3. Photo → 4. Upload audio → 5. Lipsync
+    Single path — RunPod only:
+      1. TTS voice (edge-tts, free) → 2. Source base video (Pexels, free) → 3. LatentSync 1.6 lipsync (RunPod)
 
-    Path B (RunPod — NEW, 15-50x cheaper):
-      1. Source base video (Pexels free) → 2. TTS (edge-tts free) → 3. LatentSync 1.6 (RunPod)
+    All settings come from AI profile (voice persona, appearance for video search).
     """
     results: dict = {"steps": [], "total_cost": 0.0, "pipeline_id": uuid.uuid4().hex[:12]}
-    is_runpod = lipsync_model_key == "runpod_latentsync"
 
-    # ═══ STEP 1: Generate voice ═══
-    if voice_engine == "kokoro" or (is_runpod and voice_engine == "edge_tts"):
-        # Use Kokoro TTS service (edge-tts based, free, Russian support)
-        from app.services.kokoro_tts_service import generate_voice_for_moment
-        tts_result = await generate_voice_for_moment(
-            text=text,
-            moment_type=moment_type,
-            persona=voice_id,
-        )
-    else:
-        tts_result = await generate_tts(text, voice_id)
+    # ═══ STEP 1: Generate voice (edge-tts, free) ═══
+    from app.services.kokoro_tts_service import generate_voice_for_moment
+    tts_result = await generate_voice_for_moment(
+        text=text,
+        moment_type=moment_type,
+        persona=voice_id,
+    )
 
-    results["steps"].append({"step": "tts", "result": tts_result, "engine": voice_engine})
+    results["steps"].append({"step": "tts", "result": tts_result, "engine": "edge_tts"})
     results["total_cost"] += tts_result.get("cost", 0)
 
     if not tts_result.get("success"):
@@ -1077,127 +1062,43 @@ async def run_full_pipeline(
 
     audio_path = tts_result.get("file_path", "")
 
-    # ═══ PATH B: RunPod LatentSync 1.6 (cheap path) ═══
-    if is_runpod:
-        # Step 2: Source base video (free from Pexels or provided)
-        video_url = base_video_url
-        if not video_url:
-            from app.services.smart_girl_video_sourcer import get_random_base_video
-            base_video = await get_random_base_video(appearance=appearance)
-            if base_video:
-                video_url = base_video.get("url") or base_video.get("file_path")
-                results["steps"].append({
-                    "step": "base_video",
-                    "source": "pexels",
-                    "video": base_video,
-                })
-            else:
-                results["success"] = False
-                results["error"] = "No base video available. Set PEXELS_API_KEY or provide base_video_url."
-                return results
+    # ═══ STEP 2: Source base video (Pexels, free) ═══
+    video_url = base_video_url
+    if not video_url:
+        from app.services.smart_girl_video_sourcer import get_random_base_video
+        base_video = await get_random_base_video(appearance=appearance)
+        if base_video:
+            video_url = base_video.get("url") or base_video.get("file_path")
+            results["steps"].append({
+                "step": "base_video",
+                "source": "pexels",
+                "video": base_video,
+            })
         else:
-            results["steps"].append({"step": "base_video", "source": "provided", "url": video_url})
-
-        # Step 3: Upload audio (for RunPod, use direct URL or local path)
-        audio_url = audio_path  # RunPod service handles local paths
-
-        # Step 4: Generate lipsync with LatentSync 1.6 on RunPod
-        lipsync_result = await generate_lipsync_video(
-            image_url=video_url,
-            audio_url=audio_url,
-            model_key="runpod_latentsync",
-        )
-        results["steps"].append({"step": "lipsync", "result": lipsync_result, "engine": "runpod"})
-        results["total_cost"] += lipsync_result.get("cost_estimate", 0)
-
-        if not lipsync_result.get("success", False):
             results["success"] = False
-            results["error"] = f"RunPod LatentSync failed: {lipsync_result.get('error')}"
+            results["error"] = "No base video available. Set PEXELS_API_KEY or provide base_video_url."
             return results
-
-        results["success"] = True
-        results["engine"] = "runpod_latentsync"
-        return results
-
-    # ═══ PATH A: fal.ai (existing premium path) ═══
-    # Step 2: Build smart prompt if needed
-    if not photo_prompt:
-        prompt_data = build_photo_prompt(
-            content_type=content_type,
-            appearance=appearance,
-            realism_level="maximum" if quality == "maximum" else "high",
-        )
-        photo_prompt = prompt_data["prompt"]
-        neg_prompt = prompt_data["negative_prompt"]
     else:
-        neg_prompt = NEGATIVE_QUALITY
+        results["steps"].append({"step": "base_video", "source": "provided", "url": video_url})
 
-    results["steps"].append({"step": "prompt", "prompt": photo_prompt})
+    # ═══ STEP 3: Generate lipsync with LatentSync 1.6 on RunPod ═══
+    audio_url = audio_path  # RunPod service handles local paths
 
-    # Step 3: Generate photo
-    if face_image_url:
-        photo_result = await generate_photo_with_face(
-            prompt=photo_prompt,
-            face_image_url=face_image_url,
-            reference_images=reference_images,
-            negative_prompt=neg_prompt,
-        )
-        img_data = photo_result.get("image", {})
-    else:
-        photo_result = await generate_photo(
-            prompt=photo_prompt,
-            negative_prompt=neg_prompt,
-            model_key=photo_model_key,
-        )
-        images = photo_result.get("images", [])
-        img_data = images[0] if images else {}
-
-    results["steps"].append({"step": "photo", "result": photo_result})
-    results["total_cost"] += photo_result.get("cost_estimate", 0)
-
-    if not photo_result.get("success"):
-        results["success"] = False
-        results["error"] = f"Photo failed: {photo_result.get('error')}"
-        return results
-
-    image_url = img_data.get("url", "") if isinstance(img_data, dict) else ""
-    if not image_url:
-        results["success"] = False
-        results["error"] = "No image URL available for lipsync"
-        return results
-
-    # Step 4: Upload audio to fal.ai storage
-    audio_url = await _upload_file_to_fal(audio_path)
-    if not audio_url:
-        results["success"] = False
-        results["error"] = "Failed to upload audio to fal.ai storage"
-        return results
-
-    # Step 5: Generate lipsync video
     lipsync_result = await generate_lipsync_video(
-        image_url=image_url,
+        image_url=video_url,
         audio_url=audio_url,
-        model_key=lipsync_model_key,
+        model_key="runpod_latentsync",
     )
-    results["steps"].append({"step": "lipsync", "result": lipsync_result, "engine": "fal.ai"})
+    results["steps"].append({"step": "lipsync", "result": lipsync_result, "engine": "runpod"})
     results["total_cost"] += lipsync_result.get("cost_estimate", 0)
 
     if not lipsync_result.get("success", False):
         results["success"] = False
-        results["error"] = f"Lipsync failed: {lipsync_result.get('error')}"
+        results["error"] = f"RunPod LatentSync failed: {lipsync_result.get('error')}"
         return results
 
-    # Step 6 (optional): Generate I2V movement
-    if generate_i2v:
-        i2v_result = await generate_video_from_image(
-            image_url=image_url,
-            prompt=f"{content_type} scene, natural movement, realistic",
-        )
-        results["steps"].append({"step": "i2v", "result": i2v_result})
-        results["total_cost"] += i2v_result.get("cost_estimate", 0)
-
     results["success"] = True
-    results["engine"] = "fal.ai"
+    results["engine"] = "runpod_latentsync"
     return results
 
 

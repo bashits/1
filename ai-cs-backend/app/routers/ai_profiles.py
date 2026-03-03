@@ -221,15 +221,7 @@ class TrainLoraRequest(BaseModel):
 class GenerateVideoRequest(BaseModel):
     text: str
     moment_type: str = "generic"
-    # Desired output duration in seconds (user-selectable for predictable cost)
-    duration_seconds: Optional[float] = None  # allowed: 3, 5, 10, 15
-
-    photo_prompt: Optional[str] = None
-    photo_model_key: str = "flux2_realism"
-    lipsync_model_key: str = "omnihuman"
-    generate_i2v: bool = False
-    i2v_model_key: str = "kling"
-    i2v_prompt: str = ""
+    base_video_url: Optional[str] = None  # optional: provide own base video URL
 
 
 class SchedulePostRequest(BaseModel):
@@ -888,10 +880,14 @@ async def generate_video(
     req: GenerateVideoRequest,
     db: aiosqlite.Connection = Depends(get_db),
 ):
-    """Full pipeline: voice (ElevenLabs v3) + photo (fal.ai with LoRA) + lip-sync (+ optional I2V).
+    """RunPod LatentSync 1.6 video generation pipeline.
 
-    LoRA-first approach: video generation is blocked until LoRA is trained.
-    Photo step uses LoRA for face consistency.
+    Single path — no LoRA needed:
+      1. edge-tts voice (free) → 2. Pexels base video (free) → 3. LatentSync 1.6 lipsync (RunPod ~$0.009/3s)
+
+    Profile settings used:
+      - voice_config.persona_id → voice persona for edge-tts
+      - appearance → Pexels video search queries (ethnicity, hair_color)
     """
     cursor = await db.execute("SELECT * FROM ai_profiles WHERE id = ?", (profile_id,))
     row = await cursor.fetchone()
@@ -900,199 +896,25 @@ async def generate_video(
 
     profile = _parse_profile(row)
 
-    is_runpod = req.lipsync_model_key == "runpod_latentsync"
-
-    # ═══ BLOCK VIDEO GENERATION WITHOUT LoRA (skip for RunPod path) ═══
-    lora_status = profile.get("lora_training_status", "not_trained")
-    if not is_runpod and lora_status != "trained":
-        status_messages = {
-            "not_trained": "Сначала обучите LoRA! Видео требует обученной модели для реалистичного лица. (Или используйте RunPod LatentSync)",
-            "sourcing_photos": "LoRA: идёт поиск реальных фото модели... Подождите.",
-            "generating_dataset": "LoRA: подготовка датасета... Подождите.",
-            "training": "LoRA обучается... Подождите 5-15 минут.",
-            "failed": "LoRA обучение не удалось. Попробуйте обучить заново.",
-        }
-        msg = status_messages.get(lora_status, f"LoRA статус: {lora_status}. Сначала обучите LoRA.")
-        raise HTTPException(status_code=400, detail=msg)
-
-    # ═══ RunPod LatentSync 1.6 path (cheap, no LoRA needed) ═══
-    if is_runpod:
-        from app.services.content_generation import run_full_pipeline
-        appearance = profile.get("appearance", {})
-        voice_config = profile.get("voice_config", {})
-        persona_id = voice_config.get("persona_id", "jessica_fire")
-        result = await run_full_pipeline(
-            text=req.text,
-            lipsync_model_key="runpod_latentsync",
-            voice_engine="kokoro",
-            voice_id=persona_id,
-            moment_type=req.moment_type,
-            appearance=appearance,
-        )
-        total_cost = result.get("total_cost", 0)
-        if result.get("success"):
-            # Save to content_items
-            lipsync_step = next((s for s in result.get("steps", []) if s.get("step") == "lipsync"), None)
-            video_data = (lipsync_step or {}).get("result", {}).get("video", {})
-            await db.execute(
-                """INSERT INTO content_items (profile_id, content_type, title, prompt, file_path, file_url, cost, status, metadata)
-                   VALUES (?, 'video', ?, ?, ?, ?, ?, 'completed', ?)""",
-                (
-                    profile_id,
-                    f"Video: {req.moment_type} (RunPod)",
-                    req.text,
-                    video_data.get("file_path") if isinstance(video_data, dict) else None,
-                    video_data.get("url") if isinstance(video_data, dict) else None,
-                    total_cost,
-                    json.dumps({"moment_type": req.moment_type, "engine": "runpod_latentsync", "lipsync_model_key": "runpod_latentsync"}),
-                ),
-            )
-            await db.execute(
-                "UPDATE ai_profiles SET total_videos = total_videos + 1, total_cost = total_cost + ?, updated_at = datetime('now') WHERE id = ?",
-                (total_cost, profile_id),
-            )
-            await db.commit()
-        return result
-
-    # ═══ fal.ai path (existing) ═══
-    # Step 1: Voice
-    voice_result = await generate_girl_voice(
-        profile_data=profile, text=req.text, moment_type=req.moment_type
-    )
-    if not voice_result.get("success"):
-        return {
-            "success": False,
-            "error": f"Voice failed: {voice_result.get('error')}",
-            "steps": [{"step": "voice", "result": voice_result}],
-        }
-
-    # Step 2: Photo — always use LoRA for face consistency
-    lora_url = profile.get("lora_model_url")
-    trigger_word = profile.get("lora_trigger_word")
+    # Extract profile settings for pipeline
+    from app.services.content_generation import run_full_pipeline
     appearance = profile.get("appearance", {})
+    voice_config = profile.get("voice_config", {})
+    persona_id = voice_config.get("persona_id", "jessica_fire")
 
-    if req.photo_prompt:
-        photo_prompt = f"{trigger_word}, {req.photo_prompt}" if trigger_word else req.photo_prompt
-    else:
-        photo_prompt = build_lora_prompt(
-            trigger_word=trigger_word,
-            appearance=appearance,
-            content_type="gaming_reaction",
-            custom_scene=req.photo_prompt or "",
-        )
-
-    from app.services.content_generation import (
-        generate_photo as fal_photo,
-        generate_photo_with_face as fal_photo_with_face,
-        _upload_file_to_fal,
-        generate_lipsync_video,
-        generate_video_from_image,
+    result = await run_full_pipeline(
+        text=req.text,
+        voice_id=persona_id,
+        moment_type=req.moment_type,
+        appearance=appearance,
+        base_video_url=req.base_video_url,
     )
 
-    used_reference_images = False
-    # Always prefer LoRA for video photo step
-    if lora_url and trigger_word:
-        photo_result = await generate_photo_with_lora(
-            prompt=photo_prompt,
-            lora_url=lora_url,
-            lora_scale=LORA_INFERENCE_CONFIG["default_lora_scale"],
-            width=1024,
-            height=1024,
-            num_images=1,
-            guidance_scale=LORA_INFERENCE_CONFIG["default_guidance_scale"],
-            num_inference_steps=LORA_INFERENCE_CONFIG["default_num_inference_steps"],
-        )
-    else:
-        # Fallback: reference images or standard (shouldn't happen if LoRA is trained)
-        reference_images = profile.get("reference_images") or []
-        if not isinstance(reference_images, list):
-            reference_images = []
-        if reference_images:
-            used_reference_images = True
-            photo_result = await fal_photo_with_face(
-                prompt=photo_prompt,
-                face_image_url=reference_images[0],
-                reference_images=reference_images[:4],
-                width=1024,
-                height=1024,
-                method="flux2_pro",
-            )
-        else:
-            photo_result = await fal_photo(prompt=photo_prompt, model_key=req.photo_model_key)
-
-    if not photo_result.get("success"):
-        return {
-            "success": False,
-            "error": f"Photo failed: {photo_result.get('error')}",
-            "steps": [
-                {"step": "voice", "result": voice_result},
-                {"step": "photo", "result": photo_result},
-            ],
-        }
-
-    images = photo_result.get("images", [])
-    image_url = images[0].get("url") if images else None
-    if not image_url:
-        return {"success": False, "error": "No image URL from photo generation"}
-
-    # Step 3: Lip-sync
-    audio_url = await _upload_file_to_fal(voice_result.get("file_path", ""))
-    if not audio_url:
-        return {"success": False, "error": "Failed to upload audio for lip-sync"}
-
-    requested_duration = float(req.duration_seconds) if req.duration_seconds is not None else None
-    if requested_duration is not None:
-        allowed = {float(d) for d in VIDEO_DURATION_OPTIONS}
-        if requested_duration not in allowed:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid duration_seconds={requested_duration}. Allowed: {sorted(VIDEO_DURATION_OPTIONS)}",
-            )
-
-    raw_voice_duration = voice_result.get("duration")
-    voice_duration = float(raw_voice_duration) if raw_voice_duration is not None else 3.0
-
-    # Enforce upper bound to keep costs predictable
-    if requested_duration is not None and voice_duration > requested_duration + 0.2:
-        return {
-            "success": False,
-            "error": f"Voice is ~{voice_duration:.1f}s which exceeds selected duration {requested_duration:.0f}s. Shorten text or pick longer duration.",
-            "steps": [{"step": "voice", "result": voice_result}],
-        }
-
-    duration_seconds = requested_duration or voice_duration
-
-    lipsync_result = await generate_lipsync_video(
-        image_url=image_url,
-        audio_url=audio_url,
-        model_key=req.lipsync_model_key,
-        duration_seconds=duration_seconds,
-    )
-
-    # Step 4 (optional): I2V from the same identity image
-    i2v_result = None
-    if req.generate_i2v:
-        # Most I2V endpoints only support 5s or 10s; map UI durations.
-        i2v_duration = "10" if duration_seconds >= 10 else "5"
-        if req.i2v_model_key == "wan21":
-            i2v_duration = "5"
-        i2v_result = await generate_video_from_image(
-            image_url=image_url,
-            prompt=req.i2v_prompt,
-            model_key=req.i2v_model_key,
-            duration=i2v_duration,
-        )
-
-    total_cost = round(
-        float(voice_result.get("cost") or 0)
-        + float(photo_result.get("cost_estimate") or 0)
-        + float(lipsync_result.get("cost_estimate") or 0)
-        + float((i2v_result or {}).get("cost_estimate") or 0),
-        4,
-    )
-
-    if lipsync_result.get("success"):
-        video_data = lipsync_result.get("video", {})
+    total_cost = result.get("total_cost", 0)
+    if result.get("success"):
+        # Save to content_items
+        lipsync_step = next((s for s in result.get("steps", []) if s.get("step") == "lipsync"), None)
+        video_data = (lipsync_step or {}).get("result", {}).get("video", {})
         await db.execute(
             """INSERT INTO content_items (profile_id, content_type, title, prompt, file_path, file_url, cost, status, metadata)
                VALUES (?, 'video', ?, ?, ?, ?, ?, 'completed', ?)""",
@@ -1103,16 +925,11 @@ async def generate_video(
                 video_data.get("file_path") if isinstance(video_data, dict) else None,
                 video_data.get("url") if isinstance(video_data, dict) else None,
                 total_cost,
-                json.dumps(
-                    {
-                        "moment_type": req.moment_type,
-                        "persona": profile.get("voice_config", {}).get("persona_id"),
-                        "photo_model_key": req.photo_model_key,
-                        "lipsync_model_key": req.lipsync_model_key,
-                        "used_reference_images": used_reference_images,
-                        "i2v": i2v_result,
-                    }
-                ),
+                json.dumps({
+                    "moment_type": req.moment_type,
+                    "engine": "runpod_latentsync",
+                    "persona": persona_id,
+                }),
             ),
         )
         await db.execute(
@@ -1121,19 +938,7 @@ async def generate_video(
         )
         await db.commit()
 
-    steps = [
-        {"step": "voice", "result": voice_result},
-        {"step": "photo", "result": photo_result},
-        {"step": "lipsync", "result": lipsync_result},
-    ]
-    if i2v_result is not None:
-        steps.append({"step": "i2v", "result": i2v_result})
-
-    return {
-        "success": lipsync_result.get("success", False),
-        "total_cost": total_cost,
-        "steps": steps,
-    }
+    return result
 
 
 # ─── Content Gallery ──────────────────────────────────────────────────

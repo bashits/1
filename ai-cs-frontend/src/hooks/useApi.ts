@@ -676,13 +676,7 @@ export interface ProfileLearningResponse {
 export interface GenVideoReq {
   text: string;
   moment_type?: string;
-  duration_seconds?: number;
-  photo_prompt?: string;
-  photo_model_key?: string;
-  lipsync_model_key?: string;
-  generate_i2v?: boolean;
-  i2v_model_key?: string;
-  i2v_prompt?: string;
+  base_video_url?: string;
 }
 
 export interface VideoGenResult {
