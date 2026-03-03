@@ -1016,9 +1016,10 @@ const VIDEO_DURATION_OPTIONS = [
 ];
 
 const LIPSYNC_MODELS_UI = [
-  { id: "omnihuman", label: "OmniHuman-1 (топ качество)", quality: 10 },
-  { id: "kling_avatar", label: "Kling Avatar (быстро)", quality: 7 },
-  { id: "latentsync", label: "LatentSync (бюджет)", quality: 6 },
+  { id: "runpod_latentsync", label: "LatentSync 1.6 RunPod (15-50x дешевле!)", quality: 8, engine: "runpod", cost: "~$0.009/3с" },
+  { id: "omnihuman", label: "OmniHuman-1 (топ качество, fal.ai)", quality: 10, engine: "fal.ai", cost: "~$0.48/3с" },
+  { id: "kling_avatar", label: "Kling Avatar (быстро, fal.ai)", quality: 7, engine: "fal.ai", cost: "~$0.35/3с" },
+  { id: "latentsync", label: "LatentSync fal.ai (бюджет)", quality: 6, engine: "fal.ai", cost: "$0.20 flat" },
 ];
 
 function GenerateTab({
@@ -1382,9 +1383,18 @@ function GenerateTab({
               className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
             >
               {LIPSYNC_MODELS_UI.map((m) => (
-                <option key={m.id} value={m.id}>{m.label}</option>
+                <option key={m.id} value={m.id}>{m.label} ({m.cost})</option>
               ))}
             </select>
+            {videoLipsyncModel === "runpod_latentsync" && (
+              <div className="mt-2 bg-gradient-to-r from-emerald-500/10 to-cyan-500/10 border border-emerald-500/20 rounded-lg p-3">
+                <p className="text-xs text-emerald-400 font-semibold mb-1">RunPod Serverless — LatentSync 1.6</p>
+                <p className="text-[10px] text-zinc-400">
+                  15-50x дешевле fal.ai! Бесплатный TTS (edge-tts) + бесплатное базовое видео (Pexels) + GPU по секундам.
+                  Требует RUNPOD_API_KEY + endpoint.
+                </p>
+              </div>
+            )}
           </div>
 
           {/* Cost estimate */}
@@ -1409,8 +1419,8 @@ function GenerateTab({
             </div>
           )}
 
-          {/* Video button — blocked without LoRA */}
-          {selected?.lora_training_status !== "trained" ? (
+          {/* Video button — RunPod doesn't need LoRA, fal.ai does */}
+          {videoLipsyncModel !== "runpod_latentsync" && selected?.lora_training_status !== "trained" ? (
             <div className="w-full bg-zinc-800 border border-amber-500/30 px-4 py-3 rounded-lg text-center">
               <p className="text-sm text-amber-400 font-medium mb-1">
                 Видео заблокировано — сначала обучите LoRA
@@ -1418,7 +1428,7 @@ function GenerateTab({
               <p className="text-xs text-zinc-400">
                 {selected?.lora_training_status === "training" || selected?.lora_training_status === "sourcing_photos"
                   ? "Обучение уже идёт... Подождите 5-15 минут."
-                  : "Перейдите в таб 'Обзор' и нажмите 'Обучить LoRA на реальных фото'"}
+                  : "Перейдите в таб 'Обзор' и нажмите 'Обучить LoRA на реальных фото' (или используйте RunPod LatentSync)"}
               </p>
             </div>
           ) : (
@@ -1439,7 +1449,9 @@ function GenerateTab({
             </button>
           )}
           <p className="text-xs text-zinc-500">
-            {selected?.lora_training_status === "trained" ? (
+            {videoLipsyncModel === "runpod_latentsync" ? (
+              <span className="text-emerald-400">RunPod: Pexels видео → edge-tts голос (FREE) → LatentSync 1.6 (~$0.009/3с)</span>
+            ) : selected?.lora_training_status === "trained" ? (
               <span className="text-green-400">LoRA → ElevenLabs v3 голос → fal.ai LoRA фото → {LIPSYNC_MODELS_UI.find(m => m.id === videoLipsyncModel)?.label || "Lip-sync"}</span>
             ) : (
               <span className="text-amber-400">LoRA не обучена — видео недоступно</span>

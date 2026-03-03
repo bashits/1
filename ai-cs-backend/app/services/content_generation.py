@@ -144,6 +144,17 @@ LIPSYNC_MODELS = {
         "best_for": ["free", "budget", "cs2_reels", "circle_overlay", "pngtuber"],
         "note": "Uses FFmpeg zoompan + breathing animation. No API calls needed.",
     },
+    "runpod_latentsync": {
+        "id": "runpod/latentsync-v1.6",
+        "name": "LatentSync 1.6 (RunPod Serverless)",
+        "quality": 8,
+        "cost_per_second": 0.003,  # ~$0.009 per 3s clip on RTX 3090
+        "input_type": "video",  # video + audio → lip-synced video
+        "best_for": ["budget", "v2v_lipsync", "consistent", "face_detailer"],
+        "engine": "runpod",
+        "features": ["LatentSync 1.6", "512x512", "Face Detailer", "pay-per-second"],
+        "note": "15-50x cheaper than fal.ai. Requires RUNPOD_API_KEY + RUNPOD_ENDPOINT_ID.",
+    },
 }
 
 VIDEO_MODELS = {
@@ -188,6 +199,11 @@ def _calc_lipsync_cost(model_key: str, duration_seconds: float) -> float:
         if duration_seconds <= 40:
             return ls_model.get("cost_flat_under_40s", 0.20)
         return round(0.20 + ls_model.get("cost_per_second_over_40s", 0.005) * (duration_seconds - 40), 4)
+
+    if model_key == "runpod_latentsync":
+        # RunPod Serverless: ~$0.003/sec (GPU time × processing ratio)
+        from app.services.runpod_lipsync_service import estimate_runpod_cost
+        return estimate_runpod_cost(duration_seconds)
 
     # All other models (omnihuman, kling_avatar, veed_fabric): simple per-second
     cost_per_sec = ls_model.get("cost_per_second", 0.0)
@@ -306,6 +322,16 @@ def get_all_pricing() -> dict:
                 "best_for": ["budget", "quick", "testing"],
                 "note": "$0.20 flat for ≤40s, +$0.005/sec after",
             },
+            "runpod_latentsync": {
+                "name": "LatentSync 1.6 (RunPod Serverless)",
+                "pricing_type": "per_second",
+                "cost_per_second": 0.003,
+                "quality": 8,
+                "best_for": ["budget", "v2v_lipsync", "consistent", "face_detailer"],
+                "engine": "runpod",
+                "features": ["LatentSync 1.6", "512x512", "Face Detailer", "pay-per-second"],
+                "note": "~$0.009 per 3s clip. 15-50x cheaper than fal.ai. Requires RunPod key.",
+            },
         },
         "video_models": {
             "kling": {
@@ -333,7 +359,10 @@ def get_all_pricing() -> dict:
         },
         "voice": {
             "elevenlabs": {"cost_per_1000_chars": 0.30, "note": "Premium quality"},
-            "edge_tts": {"cost": 0.0, "note": "Free, lower quality"},
+            "edge_tts": {"cost": 0.0, "note": "Free — 50+ languages, Russian support"},
+        },
+        "girl_sourcing": {
+            "pexels": {"cost": 0.0, "note": "Free — 200 req/hr, commercial use"},
         },
         "cost_examples": {
             "photo_only": {
@@ -341,8 +370,13 @@ def get_all_pricing() -> dict:
                 "cost": 0.025,
             },
             "video_3s_omnihuman": {
-                "description": "Photo + 3s OmniHuman lipsync",
+                "description": "Photo + 3s OmniHuman lipsync (fal.ai)",
                 "cost": round(0.025 + 0.0150 + 0.16 * 3, 4),
+            },
+            "video_3s_runpod_latentsync": {
+                "description": "Base video + 3s LatentSync 1.6 (RunPod)",
+                "cost": round(0.0 + 0.0 + 0.003 * 3, 4),
+                "note": "15-50x cheaper! Free TTS + free base video + RunPod GPU",
             },
             "video_5s_kling_lipsync": {
                 "description": "Photo + 5s Kling lipsync",
@@ -834,13 +868,26 @@ async def generate_lipsync_video(
     """Generate lip-synced video from image + audio.
 
     Models:
-    - omnihuman: OmniHuman 1.5 — film-grade, $0.16/sec
-    - kling_avatar: Kling LipSync — $0.014/sec (billed in 5s increments)
-    - latentsync: LatentSync — $0.20 flat for ≤40s
+    - omnihuman: OmniHuman 1.5 — film-grade, $0.16/sec (fal.ai)
+    - kling_avatar: Kling LipSync — $0.014/sec (fal.ai)
+    - latentsync: LatentSync — $0.20 flat for ≤40s (fal.ai)
+    - runpod_latentsync: LatentSync 1.6 — ~$0.009/3s clip (RunPod Serverless)
     """
     model_info = LIPSYNC_MODELS.get(model_key, LIPSYNC_MODELS["omnihuman"])
     model_id = model_info["id"]
 
+    # ─── RunPod LatentSync 1.6 path ─────────────────────────
+    if model_key == "runpod_latentsync":
+        from app.services.runpod_lipsync_service import generate_lipsync_runpod
+        return await generate_lipsync_runpod(
+            video_url=image_url,  # For RunPod, this should be a video URL
+            audio_url=audio_url,
+            use_face_detailer=True,
+            guidance_scale=2.0,
+            duration_seconds=duration_seconds,
+        )
+
+    # ─── fal.ai path (existing models) ──────────────────────
     input_data: dict = {}
     input_type = model_info.get("input_type", "image")
 
@@ -993,18 +1040,87 @@ async def run_full_pipeline(
     lipsync_model_key: str = "omnihuman",
     photo_model_key: str = "flux2_realism",
     generate_i2v: bool = False,
+    base_video_url: Optional[str] = None,
+    voice_engine: str = "edge_tts",
+    moment_type: str = "generic",
 ) -> dict:
     """Run the complete smart generation pipeline:
 
-    1. Build smart prompt (if photo_prompt not provided)
-    2. Generate TTS audio (edge-tts free / ElevenLabs premium)
-    3. Generate character photo (FLUX 2 Realism / Pro)
-    4. Generate lip-synced video (OmniHuman 1.5 / Kling / VEED)
-    5. Optional: Generate I2V movement video
+    Path A (fal.ai — existing):
+      1. Build smart prompt → 2. TTS → 3. Photo → 4. Upload audio → 5. Lipsync
+
+    Path B (RunPod — NEW, 15-50x cheaper):
+      1. Source base video (Pexels free) → 2. TTS (edge-tts free) → 3. LatentSync 1.6 (RunPod)
     """
     results: dict = {"steps": [], "total_cost": 0.0, "pipeline_id": uuid.uuid4().hex[:12]}
+    is_runpod = lipsync_model_key == "runpod_latentsync"
 
-    # Step 1: Build smart prompt if needed
+    # ═══ STEP 1: Generate voice ═══
+    if voice_engine == "kokoro" or (is_runpod and voice_engine == "edge_tts"):
+        # Use Kokoro TTS service (edge-tts based, free, Russian support)
+        from app.services.kokoro_tts_service import generate_voice_for_moment
+        tts_result = await generate_voice_for_moment(
+            text=text,
+            moment_type=moment_type,
+            voice_key=voice_id,
+        )
+    else:
+        tts_result = await generate_tts(text, voice_id)
+
+    results["steps"].append({"step": "tts", "result": tts_result, "engine": voice_engine})
+    results["total_cost"] += tts_result.get("cost", 0)
+
+    if not tts_result.get("success"):
+        results["success"] = False
+        results["error"] = f"TTS failed: {tts_result.get('error')}"
+        return results
+
+    audio_path = tts_result.get("file_path", "")
+
+    # ═══ PATH B: RunPod LatentSync 1.6 (cheap path) ═══
+    if is_runpod:
+        # Step 2: Source base video (free from Pexels or provided)
+        video_url = base_video_url
+        if not video_url:
+            from app.services.smart_girl_video_sourcer import get_random_base_video
+            base_video = await get_random_base_video(appearance=appearance)
+            if base_video:
+                video_url = base_video.get("url") or base_video.get("file_path")
+                results["steps"].append({
+                    "step": "base_video",
+                    "source": "pexels",
+                    "video": base_video,
+                })
+            else:
+                results["success"] = False
+                results["error"] = "No base video available. Set PEXELS_API_KEY or provide base_video_url."
+                return results
+        else:
+            results["steps"].append({"step": "base_video", "source": "provided", "url": video_url})
+
+        # Step 3: Upload audio (for RunPod, use direct URL or local path)
+        audio_url = audio_path  # RunPod service handles local paths
+
+        # Step 4: Generate lipsync with LatentSync 1.6 on RunPod
+        lipsync_result = await generate_lipsync_video(
+            image_url=video_url,
+            audio_url=audio_url,
+            model_key="runpod_latentsync",
+        )
+        results["steps"].append({"step": "lipsync", "result": lipsync_result, "engine": "runpod"})
+        results["total_cost"] += lipsync_result.get("cost_estimate", 0)
+
+        if not lipsync_result.get("success", False):
+            results["success"] = False
+            results["error"] = f"RunPod LatentSync failed: {lipsync_result.get('error')}"
+            return results
+
+        results["success"] = True
+        results["engine"] = "runpod_latentsync"
+        return results
+
+    # ═══ PATH A: fal.ai (existing premium path) ═══
+    # Step 2: Build smart prompt if needed
     if not photo_prompt:
         prompt_data = build_photo_prompt(
             content_type=content_type,
@@ -1017,16 +1133,6 @@ async def run_full_pipeline(
         neg_prompt = NEGATIVE_QUALITY
 
     results["steps"].append({"step": "prompt", "prompt": photo_prompt})
-
-    # Step 2: Generate voice (FREE with edge-tts)
-    tts_result = await generate_tts(text, voice_id)
-    results["steps"].append({"step": "tts", "result": tts_result})
-    results["total_cost"] += tts_result.get("cost", 0)
-
-    if not tts_result.get("success"):
-        results["success"] = False
-        results["error"] = f"TTS failed: {tts_result.get('error')}"
-        return results
 
     # Step 3: Generate photo
     if face_image_url:
@@ -1061,7 +1167,6 @@ async def run_full_pipeline(
         return results
 
     # Step 4: Upload audio to fal.ai storage
-    audio_path = tts_result.get("file_path", "")
     audio_url = await _upload_file_to_fal(audio_path)
     if not audio_url:
         results["success"] = False
@@ -1074,7 +1179,7 @@ async def run_full_pipeline(
         audio_url=audio_url,
         model_key=lipsync_model_key,
     )
-    results["steps"].append({"step": "lipsync", "result": lipsync_result})
+    results["steps"].append({"step": "lipsync", "result": lipsync_result, "engine": "fal.ai"})
     results["total_cost"] += lipsync_result.get("cost_estimate", 0)
 
     if not lipsync_result.get("success", False):
@@ -1092,6 +1197,7 @@ async def run_full_pipeline(
         results["total_cost"] += i2v_result.get("cost_estimate", 0)
 
     results["success"] = True
+    results["engine"] = "fal.ai"
     return results
 
 
@@ -1153,11 +1259,19 @@ def get_pipeline_status() -> dict:
     """Get current pipeline configuration and status."""
     has_fal_key = bool(_get_fal_key())
 
+    has_runpod_key = bool(os.getenv("RUNPOD_API_KEY"))
+    has_runpod_endpoint = bool(os.getenv("RUNPOD_ENDPOINT_ID"))
+    has_pexels_key = bool(os.getenv("PEXELS_API_KEY"))
+
     return {
         "fal_api_configured": has_fal_key,
+        "runpod_configured": has_runpod_key and has_runpod_endpoint,
+        "runpod_api_key_set": has_runpod_key,
+        "runpod_endpoint_set": has_runpod_endpoint,
+        "pexels_configured": has_pexels_key,
         "tts_available": True,
         "photo_generation_available": has_fal_key,
-        "lipsync_available": has_fal_key,
+        "lipsync_available": has_fal_key or (has_runpod_key and has_runpod_endpoint),
         "video_generation_available": has_fal_key,
         "available_voices": list(EDGE_TTS_VOICES.keys()),
         "available_photo_models": [
@@ -1201,6 +1315,7 @@ def get_pipeline_status() -> dict:
                 "photos_dev": f"~{int(9/0.025)} images (FLUX Dev @ $0.025)",
                 "voice_clips": "unlimited (edge-tts free)",
                 "lipsync_omnihuman_3s": f"~{int(9/(0.16*3))} clips (OmniHuman @ $0.16/s)",
+                "lipsync_runpod_3s": f"~{int(9/0.009)} clips (LatentSync 1.6 RunPod @ ~$0.009/3s)",
                 "lipsync_kling_5s": f"~{int(9/0.07)} clips (Kling LipSync @ $0.07/5s)",
                 "videos_kling_5s": f"~{int(9/0.28)} clips (Kling 2.1 I2V @ $0.28/5s)",
             }
