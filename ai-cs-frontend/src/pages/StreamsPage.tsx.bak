@@ -1,0 +1,161 @@
+import { useEffect, useState } from "react";
+import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Plus, Radio, Clock } from "lucide-react";
+import { api, Stream } from "@/hooks/useApi";
+
+const STATUS_COLORS: Record<string, string> = {
+  pending: "bg-zinc-500/20 text-zinc-400",
+  analyzing: "bg-yellow-500/20 text-yellow-400",
+  analyzed: "bg-green-500/20 text-green-400",
+};
+
+const STATUS_LABELS: Record<string, string> = {
+  pending: "В очереди",
+  analyzing: "Анализируется",
+  analyzed: "Проанализировано",
+};
+
+const PLATFORM_LABELS: Record<string, string> = {
+  twitch: "Твич",
+  youtube: "Ютуб",
+  kick: "Кик",
+};
+
+const getLabel = (labels: Record<string, string>, key: string) => labels[key] || key;
+
+export default function StreamsPage() {
+  const [streams, setStreams] = useState<Stream[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [form, setForm] = useState({
+    title: "",
+    platform: "twitch",
+    url: "",
+    streamer_name: "",
+  });
+
+  useEffect(() => {
+    loadStreams();
+  }, []);
+
+  const loadStreams = () => {
+    setLoading(true);
+    api.getStreams().then(setStreams).catch(console.error).finally(() => setLoading(false));
+  };
+
+  const handleCreate = async () => {
+    if (!form.title || !form.streamer_name) return;
+    await api.createStream(form);
+    setForm({ title: "", platform: "twitch", url: "", streamer_name: "" });
+    setDialogOpen(false);
+    loadStreams();
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-bold text-white">Стримы</h2>
+          <p className="text-sm text-zinc-400">Управление VOD и сессиями</p>
+        </div>
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <DialogTrigger asChild>
+            <Button className="bg-violet-600 hover:bg-violet-700">
+              <Plus className="h-4 w-4 mr-2" /> Добавить стрим
+            </Button>
+          </DialogTrigger>
+          <DialogContent className="bg-zinc-900 border-zinc-800">
+            <DialogHeader>
+              <DialogTitle className="text-white">Новый стрим</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div>
+                <Label className="text-zinc-400">Название</Label>
+                <Input
+                  value={form.title}
+                  onChange={(e) => setForm({ ...form, title: e.target.value })}
+                  className="bg-zinc-800 border-zinc-700 text-white"
+                  placeholder="CS2 ранкед сессия #48"
+                />
+              </div>
+              <div>
+                <Label className="text-zinc-400">Ник стримера</Label>
+                <Input
+                  value={form.streamer_name}
+                  onChange={(e) => setForm({ ...form, streamer_name: e.target.value })}
+                  className="bg-zinc-800 border-zinc-700 text-white"
+                  placeholder="например, prostreamer"
+                />
+              </div>
+              <div>
+                <Label className="text-zinc-400">Платформа</Label>
+                <Input
+                  value={form.platform}
+                  onChange={(e) => setForm({ ...form, platform: e.target.value })}
+                  className="bg-zinc-800 border-zinc-700 text-white"
+                  placeholder="twitch"
+                />
+              </div>
+              <div>
+                <Label className="text-zinc-400">URL (необязательно)</Label>
+                <Input
+                  value={form.url}
+                  onChange={(e) => setForm({ ...form, url: e.target.value })}
+                  className="bg-zinc-800 border-zinc-700 text-white"
+                  placeholder="https://twitch.tv/..."
+                />
+              </div>
+              <Button onClick={handleCreate} className="w-full bg-violet-600 hover:bg-violet-700">
+                Создать стрим
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      </div>
+
+      {loading ? (
+        <div className="text-zinc-400 text-center py-8">Загрузка...</div>
+      ) : streams.length === 0 ? (
+        <div className="text-zinc-400 text-center py-8">Стримов пока нет. Нажми «Добавить стрим».</div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {streams.map((stream) => (
+            <Card key={stream.id} className="bg-zinc-900 border-zinc-800 hover:border-zinc-700 transition-colors">
+              <CardContent className="pt-4 pb-4">
+                <div className="flex items-center justify-between mb-2">
+                  <Badge className={STATUS_COLORS[stream.status] || "bg-zinc-500/20 text-zinc-400"}>
+                    {getLabel(STATUS_LABELS, stream.status)}
+                  </Badge>
+                  <span className="text-xs text-zinc-500">#{stream.id}</span>
+                </div>
+                <h3 className="text-white font-medium mb-1">{stream.title}</h3>
+                <div className="flex items-center gap-2 text-xs text-zinc-500 mb-2">
+                  <Radio className="h-3 w-3" />
+                  <span>{getLabel(PLATFORM_LABELS, stream.platform)}</span>
+                  <span>&#8226;</span>
+                  <span>{stream.streamer_name}</span>
+                </div>
+                {stream.started_at && (
+                  <div className="flex items-center gap-1 text-xs text-zinc-500">
+                    <Clock className="h-3 w-3" />
+                    <span>{new Date(stream.started_at).toLocaleString()}</span>
+                  </div>
+                )}
+                {stream.url && (
+                  <a href={stream.url} target="_blank" rel="noreferrer" className="text-xs text-violet-400 hover:underline mt-1 block">
+                    Открыть VOD
+                  </a>
+                )}
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
