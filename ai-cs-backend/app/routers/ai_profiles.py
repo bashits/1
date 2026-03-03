@@ -602,7 +602,7 @@ async def create_profile(
     return result
 
 
-@router.get("/{profile_id}")
+@router.get("/{profile_id:int}")
 async def get_profile(profile_id: int, db: aiosqlite.Connection = Depends(get_db)):
     cursor = await db.execute("SELECT * FROM ai_profiles WHERE id = ?", (profile_id,))
     row = await cursor.fetchone()
@@ -613,7 +613,7 @@ async def get_profile(profile_id: int, db: aiosqlite.Connection = Depends(get_db
     return p
 
 
-@router.put("/{profile_id}")
+@router.put("/{profile_id:int}")
 async def update_profile(
     profile_id: int,
     update: ProfileUpdateRequest,
@@ -663,7 +663,7 @@ async def update_profile(
     return _parse_profile(row)
 
 
-@router.delete("/{profile_id}")
+@router.delete("/{profile_id:int}")
 async def delete_profile(profile_id: int, db: aiosqlite.Connection = Depends(get_db)):
     await db.execute("DELETE FROM ai_profiles WHERE id = ?", (profile_id,))
     await db.commit()
@@ -672,7 +672,7 @@ async def delete_profile(profile_id: int, db: aiosqlite.Connection = Depends(get
 
 # ─── Voice Generation ─────────────────────────────────────────────────
 
-@router.post("/{profile_id}/generate-voice")
+@router.post("/{profile_id:int}/generate-voice")
 async def generate_voice(
     profile_id: int,
     req: GenerateVoiceRequest,
@@ -724,7 +724,7 @@ async def generate_voice(
     return result
 
 
-@router.get("/{profile_id}/voice-samples")
+@router.get("/{profile_id:int}/voice-samples")
 async def get_voice_samples(
     profile_id: int,
     limit: int = Query(default=20, le=100),
@@ -748,7 +748,7 @@ async def get_voice_samples(
     return result
 
 
-@router.post("/{profile_id}/preview-script")
+@router.post("/{profile_id:int}/preview-script")
 async def preview_script(
     profile_id: int,
     req: GenerateVoiceRequest,
@@ -777,7 +777,7 @@ async def preview_script(
 
 # ─── Content Generation ──────────────────────────────────────────────
 
-@router.post("/{profile_id}/generate-photo")
+@router.post("/{profile_id:int}/generate-photo")
 async def generate_photo(
     profile_id: int,
     req: GeneratePhotoRequest,
@@ -978,7 +978,7 @@ async def generate_photo(
     return result
 
 
-@router.post("/{profile_id}/generate-video")
+@router.post("/{profile_id:int}/generate-video")
 async def generate_video(
     profile_id: int,
     req: GenerateVideoRequest,
@@ -1060,7 +1060,7 @@ class SaveContentRequest(BaseModel):
     metadata: Optional[dict] = None
 
 
-@router.post("/{profile_id}/content")
+@router.post("/{profile_id:int}/content")
 async def save_content(
     profile_id: int,
     req: SaveContentRequest,
@@ -1111,7 +1111,7 @@ async def save_content(
     }
 
 
-@router.get("/{profile_id}/content")
+@router.get("/{profile_id:int}/content")
 async def get_content(
     profile_id: int,
     content_type: Optional[str] = None,
@@ -1140,7 +1140,7 @@ async def get_content(
     return result
 
 
-@router.get("/{profile_id}/costs")
+@router.get("/{profile_id:int}/costs")
 async def get_costs(profile_id: int, db: aiosqlite.Connection = Depends(get_db)):
     """Cost breakdown for this girl."""
     cursor = await db.execute("SELECT * FROM ai_profiles WHERE id = ?", (profile_id,))
@@ -1168,7 +1168,7 @@ async def get_costs(profile_id: int, db: aiosqlite.Connection = Depends(get_db))
 
 # ─── Social Media ─────────────────────────────────────────────────────
 
-@router.post("/{profile_id}/schedule-post")
+@router.post("/{profile_id:int}/schedule-post")
 async def schedule_post(
     profile_id: int,
     req: SchedulePostRequest,
@@ -1188,7 +1188,7 @@ async def schedule_post(
     return {"success": True, "message": f"Post scheduled for {req.platform}"}
 
 
-@router.get("/{profile_id}/social-posts")
+@router.get("/{profile_id:int}/social-posts")
 async def get_social_posts(
     profile_id: int,
     platform: Optional[str] = None,
@@ -1220,7 +1220,7 @@ async def get_social_posts(
 
 # ─── Memory / Brain ───────────────────────────────────────────────────
 
-@router.get("/{profile_id}/memory")
+@router.get("/{profile_id:int}/memory")
 async def get_memory(profile_id: int, db: aiosqlite.Connection = Depends(get_db)):
     cursor = await db.execute("SELECT * FROM ai_profiles WHERE id = ?", (profile_id,))
     row = await cursor.fetchone()
@@ -1252,7 +1252,7 @@ async def get_memory(profile_id: int, db: aiosqlite.Connection = Depends(get_db)
     }
 
 
-@router.put("/{profile_id}/memory")
+@router.put("/{profile_id:int}/memory")
 async def update_memory(
     profile_id: int,
     req: UpdateMemoryRequest,
@@ -1290,7 +1290,7 @@ async def update_memory(
 
 # ─── Pipeline & Prompts ───────────────────────────────────────────────
 
-@router.get("/{profile_id}/pipeline")
+@router.get("/{profile_id:int}/pipeline")
 async def get_profile_pipeline(profile_id: int, db: aiosqlite.Connection = Depends(get_db)):
     cursor = await db.execute("SELECT * FROM ai_profiles WHERE id = ?", (profile_id,))
     row = await cursor.fetchone()
@@ -1326,7 +1326,7 @@ async def get_profile_pipeline(profile_id: int, db: aiosqlite.Connection = Depen
     }
 
 
-@router.post("/{profile_id}/generate-prompt")
+@router.post("/{profile_id:int}/generate-prompt")
 async def generate_prompt(
     profile_id: int, content_type: str = "clip_reaction", context: str = "",
     db: aiosqlite.Connection = Depends(get_db),
@@ -1340,7 +1340,7 @@ async def generate_prompt(
     return {"prompt": prompt, "content_type": content_type}
 
 
-@router.post("/{profile_id}/interpret-prompt")
+@router.post("/{profile_id:int}/interpret-prompt")
 async def interpret_prompt_endpoint(
     profile_id: int,
     text: str = "",
@@ -1374,7 +1374,7 @@ async def interpret_prompt_endpoint(
     return result
 
 
-@router.post("/{profile_id}/generate-script")
+@router.post("/{profile_id:int}/generate-script")
 async def generate_script(
     profile_id: int, moment_type: str = "clutch", moment_description: str = "",
     db: aiosqlite.Connection = Depends(get_db),
@@ -1390,7 +1390,7 @@ async def generate_script(
 
 # ─── Generation Tasks (legacy) ────────────────────────────────────────
 
-@router.get("/{profile_id}/tasks")
+@router.get("/{profile_id:int}/tasks")
 async def list_tasks(profile_id: int, db: aiosqlite.Connection = Depends(get_db)):
     cursor = await db.execute(
         "SELECT * FROM generation_tasks WHERE profile_id = ? ORDER BY created_at DESC LIMIT 50",
@@ -1412,7 +1412,7 @@ async def list_tasks(profile_id: int, db: aiosqlite.Connection = Depends(get_db)
 
 # ─── Profile Gallery (Cloud URLs, no local storage) ──────────────────
 
-@router.get("/{profile_id}/gallery")
+@router.get("/{profile_id:int}/gallery")
 async def get_gallery(
     profile_id: int,
     content_type: Optional[str] = None,
@@ -1448,7 +1448,7 @@ async def get_gallery(
     return {"gallery": result, "total": len(result)}
 
 
-@router.post("/{profile_id}/gallery/{photo_id}/approve")
+@router.post("/{profile_id:int}/gallery/{photo_id}/approve")
 async def approve_gallery_photo(
     profile_id: int, photo_id: int,
     set_as_reference: bool = False,
@@ -1513,7 +1513,7 @@ async def approve_gallery_photo(
     return {"success": True, "message": "Photo approved", "set_as_reference": set_as_reference}
 
 
-@router.delete("/{profile_id}/gallery/{photo_id}")
+@router.delete("/{profile_id:int}/gallery/{photo_id}")
 async def delete_gallery_photo(
     profile_id: int, photo_id: int,
     db: aiosqlite.Connection = Depends(get_db),
@@ -1529,7 +1529,7 @@ async def delete_gallery_photo(
 
 # ─── Voice Identity (unique voice per girl) ──────────────────────────
 
-@router.get("/{profile_id}/voice-identity")
+@router.get("/{profile_id:int}/voice-identity")
 async def get_voice_identity(
     profile_id: int,
     db: aiosqlite.Connection = Depends(get_db),
@@ -1567,7 +1567,7 @@ async def get_voice_identity(
     return d
 
 
-@router.put("/{profile_id}/voice-identity")
+@router.put("/{profile_id:int}/voice-identity")
 async def update_voice_identity(
     profile_id: int,
     voice_id: Optional[str] = None,
@@ -1640,7 +1640,7 @@ async def update_voice_identity(
 
 # ─── Prompt Learning / Auto-improvement ──────────────────────────────
 
-@router.get("/{profile_id}/learning")
+@router.get("/{profile_id:int}/learning")
 async def get_learning(
     profile_id: int,
     prompt_type: Optional[str] = None,
@@ -1688,7 +1688,7 @@ async def get_learning(
 
 # ─── LoRA Training & Management ─────────────────────────────────────
 
-@router.post("/{profile_id}/train-lora")
+@router.post("/{profile_id:int}/train-lora")
 async def train_lora(
     profile_id: int,
     req: TrainLoraRequest,
@@ -1862,7 +1862,7 @@ async def train_lora(
     }
 
 
-@router.get("/{profile_id}/lora-status")
+@router.get("/{profile_id:int}/lora-status")
 async def get_lora_status(
     profile_id: int,
     db: aiosqlite.Connection = Depends(get_db),
@@ -1944,7 +1944,7 @@ async def get_lora_status(
     }
 
 
-@router.post("/{profile_id}/complete-lora-training")
+@router.post("/{profile_id:int}/complete-lora-training")
 async def complete_lora_training(
     profile_id: int,
     db: aiosqlite.Connection = Depends(get_db),
@@ -2032,7 +2032,7 @@ async def complete_lora_training(
 
 # ─── Smart Identity Lock ─────────────────────────────────────────────
 
-@router.post("/{profile_id}/lock-identity")
+@router.post("/{profile_id:int}/lock-identity")
 async def lock_identity(
     profile_id: int,
     db: aiosqlite.Connection = Depends(get_db),
@@ -2061,7 +2061,7 @@ async def lock_identity(
     return result
 
 
-@router.get("/{profile_id}/base-videos")
+@router.get("/{profile_id:int}/base-videos")
 async def get_base_videos(
     profile_id: int,
     db: aiosqlite.Connection = Depends(get_db),
@@ -2078,7 +2078,7 @@ async def get_base_videos(
     }
 
 
-@router.delete("/{profile_id}/unlock-identity")
+@router.delete("/{profile_id:int}/unlock-identity")
 async def unlock_identity_endpoint(
     profile_id: int,
     db: aiosqlite.Connection = Depends(get_db),
@@ -2088,7 +2088,7 @@ async def unlock_identity_endpoint(
     return await unlock_identity(db, profile_id)
 
 
-@router.post("/{profile_id}/generate-backstory")
+@router.post("/{profile_id:int}/generate-backstory")
 async def generate_backstory_endpoint(
     profile_id: int,
     db: aiosqlite.Connection = Depends(get_db),
@@ -2101,7 +2101,7 @@ async def generate_backstory_endpoint(
 
 # ─── Instagram Autopilot ─────────────────────────────────────────────
 
-@router.get("/{profile_id}/autopilot")
+@router.get("/{profile_id:int}/autopilot")
 async def get_autopilot(
     profile_id: int,
     db: aiosqlite.Connection = Depends(get_db),
@@ -2111,7 +2111,7 @@ async def get_autopilot(
     return await get_autopilot_config(db, profile_id)
 
 
-@router.put("/{profile_id}/autopilot")
+@router.put("/{profile_id:int}/autopilot")
 async def update_autopilot(
     profile_id: int,
     data: dict,
@@ -2122,7 +2122,7 @@ async def update_autopilot(
     return await update_autopilot_config(db, profile_id, data)
 
 
-@router.post("/{profile_id}/autopilot/calendar")
+@router.post("/{profile_id:int}/autopilot/calendar")
 async def generate_calendar(
     profile_id: int,
     data: dict | None = None,
@@ -2143,7 +2143,7 @@ async def generate_calendar(
     }
 
 
-@router.get("/{profile_id}/autopilot/calendar")
+@router.get("/{profile_id:int}/autopilot/calendar")
 async def get_calendar(
     profile_id: int,
     status: Optional[str] = None,
@@ -2160,7 +2160,7 @@ async def get_calendar(
     }
 
 
-@router.get("/{profile_id}/autopilot/analytics")
+@router.get("/{profile_id:int}/autopilot/analytics")
 async def get_analytics(
     profile_id: int,
     db: aiosqlite.Connection = Depends(get_db),
@@ -2170,7 +2170,7 @@ async def get_analytics(
     return await get_autopilot_analytics(db, profile_id)
 
 
-@router.post("/{profile_id}/autopilot/caption")
+@router.post("/{profile_id:int}/autopilot/caption")
 async def generate_caption_endpoint(
     profile_id: int,
     data: dict | None = None,
@@ -2199,7 +2199,7 @@ async def generate_caption_endpoint(
 
 # ─── Character Memory ────────────────────────────────────────────────
 
-@router.get("/{profile_id}/character-memory")
+@router.get("/{profile_id:int}/character-memory")
 async def get_character_memories(
     profile_id: int,
     memory_type: Optional[str] = None,
@@ -2211,7 +2211,7 @@ async def get_character_memories(
     return {"profile_id": profile_id, "memories": memories, "count": len(memories)}
 
 
-@router.post("/{profile_id}/character-memory")
+@router.post("/{profile_id:int}/character-memory")
 async def add_character_memory(
     profile_id: int,
     data: dict,
@@ -2231,7 +2231,7 @@ async def add_character_memory(
     return {"success": True, "memory_id": memory_id}
 
 
-@router.get("/{profile_id}/character-context")
+@router.get("/{profile_id:int}/character-context")
 async def get_character_context(
     profile_id: int,
     db: aiosqlite.Connection = Depends(get_db),
