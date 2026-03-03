@@ -204,6 +204,7 @@ def build_simple_lipsync_payload(
             "guidance_scale": guidance_scale,
             "inference_steps": inference_steps,
             "seed": seed,
+            "use_face_detailer": use_face_detailer,
         },
     }
 
