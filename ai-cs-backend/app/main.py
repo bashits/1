@@ -8,9 +8,10 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 import os
 
 from app.database import init_db
@@ -22,7 +23,6 @@ logger = logging.getLogger(__name__)
 # CS2 Reels cleanup — delete files older than 7 days
 # ---------------------------------------------------------------------------
 CS2_CLIPS_DIRS = [
-    Path("/root/projects/ai-cs-backend/clips"),
     Path(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "clips")),
     Path(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")),
 ]
@@ -103,7 +103,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Allows all origins
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
 )
@@ -131,6 +131,12 @@ app.include_router(social_engine_router.router)
 static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 os.makedirs(static_dir, exist_ok=True)
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+# Serve frontend SPA from frontend_dist (same origin — no CORS issues)
+_frontend_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend_dist")
+if os.path.isdir(_frontend_dir):
+    # Serve frontend assets (js, css, etc.)
+    app.mount("/assets", StaticFiles(directory=os.path.join(_frontend_dir, "assets")), name="frontend_assets")
 
 
 @app.get("/healthz")
@@ -214,8 +220,15 @@ async def reseed_data():
         await db.execute("PRAGMA journal_mode=WAL")
 
         # Clear all existing data
-        for table in ["clips", "ab_tests", "moments", "streams", "trends", "region_analysis"]:
-            await db.execute(f"DELETE FROM {table}")
+        for table in ["clips", "ab_tests", "moments", "streams", "trends", "region_analysis",
+                       "ai_profiles", "ai_profile_content", "social_engine_config",
+                       "social_engine_trends", "social_engine_plans", "social_engine_posts",
+                       "social_engine_engagement", "social_engine_performance",
+                       "social_engine_learning", "character_memories"]:
+            try:
+                await db.execute(f"DELETE FROM {table}")
+            except Exception:
+                pass  # table may not exist
 
         await db.commit()
     finally:
@@ -390,3 +403,20 @@ async def seed_demo_data():
         "clips": "multiple per moment",
         "trends": len(trend_data),
     }
+
+
+# ---------------------------------------------------------------------------
+# SPA catch-all: serve frontend index.html for non-API routes
+# This MUST be the last route so it doesn't override API endpoints
+# ---------------------------------------------------------------------------
+_frontend_index = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend_dist", "index.html")
+
+@app.get("/{full_path:path}")
+async def serve_spa(request: Request, full_path: str):
+    """Serve the frontend SPA for any non-API route."""
+    # Don't intercept API, static, docs, healthz routes
+    if full_path.startswith(("api/", "static/", "assets/", "docs", "openapi", "healthz", "redoc")):
+        return {"detail": "Not Found"}
+    if os.path.isfile(_frontend_index):
+        return FileResponse(_frontend_index)
+    return {"detail": "Frontend not available"}

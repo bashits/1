@@ -1,12 +1,25 @@
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
 
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_URL}${path}`, {
-    headers: { "Content-Type": "application/json", ...options?.headers },
-    ...options,
-  });
-  if (!res.ok) throw new Error(`Ошибка API: ${res.status}`);
-  return res.json();
+  const method = (options?.method || "GET").toUpperCase();
+  const hasBody = method !== "GET" && method !== "HEAD" && method !== "DELETE";
+  const headers: Record<string, string> = {
+    ...(hasBody ? { "Content-Type": "application/json" } : {}),
+    ...(options?.headers as Record<string, string>),
+  };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    const res = await fetch(`${API_URL}${path}`, {
+      ...options,
+      headers,
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`Ошибка API: ${res.status}`);
+    return res.json();
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export const api = {
