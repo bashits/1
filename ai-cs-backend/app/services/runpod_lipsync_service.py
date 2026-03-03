@@ -52,6 +52,128 @@ def _get_runpod_endpoint() -> str:
     return os.environ.get("RUNPOD_ENDPOINT_ID", "")
 
 
+# ─── Spending Limits ──────────────────────────────────────────────────
+# Protects against accidental balance drain.
+# Configurable via env vars: RUNPOD_DAILY_LIMIT, RUNPOD_MONTHLY_LIMIT
+# Defaults: $1/day, $10/month — safe for testing
+
+DEFAULT_DAILY_LIMIT = float(os.environ.get("RUNPOD_DAILY_LIMIT", "1.0"))
+DEFAULT_MONTHLY_LIMIT = float(os.environ.get("RUNPOD_MONTHLY_LIMIT", "10.0"))
+MAX_SINGLE_JOB_COST = float(os.environ.get("RUNPOD_MAX_JOB_COST", "0.50"))  # reject jobs > $0.50
+
+# In-memory spending tracker (resets on restart; also persisted to SQLite)
+_spending_today: float = 0.0
+_spending_month: float = 0.0
+_spending_date: str = ""  # YYYY-MM-DD
+_spending_month_key: str = ""  # YYYY-MM
+_jobs_today: int = 0
+_jobs_month: int = 0
+
+
+def _reset_spending_if_needed() -> None:
+    """Reset daily/monthly counters if date has changed."""
+    global _spending_today, _spending_month, _spending_date, _spending_month_key
+    global _jobs_today, _jobs_month
+    from datetime import datetime
+    now = datetime.utcnow()
+    today = now.strftime("%Y-%m-%d")
+    month = now.strftime("%Y-%m")
+
+    if _spending_date != today:
+        _spending_today = 0.0
+        _jobs_today = 0
+        _spending_date = today
+
+    if _spending_month_key != month:
+        _spending_month = 0.0
+        _jobs_month = 0
+        _spending_month_key = month
+
+
+def check_spending_limit(estimated_cost: float) -> dict:
+    """Check if a new job would exceed spending limits.
+
+    Returns {allowed: bool, reason: str, ...}
+    """
+    _reset_spending_if_needed()
+
+    if estimated_cost > MAX_SINGLE_JOB_COST:
+        return {
+            "allowed": False,
+            "reason": f"Single job cost ${estimated_cost:.4f} exceeds max ${MAX_SINGLE_JOB_COST:.2f}",
+            "limit_type": "per_job",
+        }
+
+    if _spending_today + estimated_cost > DEFAULT_DAILY_LIMIT:
+        return {
+            "allowed": False,
+            "reason": f"Daily limit reached: ${_spending_today:.4f} spent today, limit ${DEFAULT_DAILY_LIMIT:.2f}",
+            "limit_type": "daily",
+            "spent_today": _spending_today,
+            "limit": DEFAULT_DAILY_LIMIT,
+        }
+
+    if _spending_month + estimated_cost > DEFAULT_MONTHLY_LIMIT:
+        return {
+            "allowed": False,
+            "reason": f"Monthly limit reached: ${_spending_month:.4f} spent this month, limit ${DEFAULT_MONTHLY_LIMIT:.2f}",
+            "limit_type": "monthly",
+            "spent_month": _spending_month,
+            "limit": DEFAULT_MONTHLY_LIMIT,
+        }
+
+    return {
+        "allowed": True,
+        "spent_today": _spending_today,
+        "spent_month": _spending_month,
+        "daily_remaining": round(DEFAULT_DAILY_LIMIT - _spending_today, 4),
+        "monthly_remaining": round(DEFAULT_MONTHLY_LIMIT - _spending_month, 4),
+    }
+
+
+def record_spending(cost: float) -> None:
+    """Record actual spending after a job completes."""
+    global _spending_today, _spending_month, _jobs_today, _jobs_month
+    _reset_spending_if_needed()
+    _spending_today += cost
+    _spending_month += cost
+    _jobs_today += 1
+    _jobs_month += 1
+    logger.info(
+        "RunPod spending: +$%.4f | today=$%.4f/%s | month=$%.4f/%s | jobs=%d/%d",
+        cost, _spending_today, DEFAULT_DAILY_LIMIT,
+        _spending_month, DEFAULT_MONTHLY_LIMIT,
+        _jobs_today, _jobs_month,
+    )
+
+
+def get_spending_summary() -> dict:
+    """Get current spending summary."""
+    _reset_spending_if_needed()
+    return {
+        "daily": {
+            "spent": round(_spending_today, 4),
+            "limit": DEFAULT_DAILY_LIMIT,
+            "remaining": round(max(0, DEFAULT_DAILY_LIMIT - _spending_today), 4),
+            "jobs": _jobs_today,
+            "date": _spending_date,
+        },
+        "monthly": {
+            "spent": round(_spending_month, 4),
+            "limit": DEFAULT_MONTHLY_LIMIT,
+            "remaining": round(max(0, DEFAULT_MONTHLY_LIMIT - _spending_month), 4),
+            "jobs": _jobs_month,
+            "month": _spending_month_key,
+        },
+        "limits": {
+            "daily_limit": DEFAULT_DAILY_LIMIT,
+            "monthly_limit": DEFAULT_MONTHLY_LIMIT,
+            "max_job_cost": MAX_SINGLE_JOB_COST,
+            "note": "Set RUNPOD_DAILY_LIMIT, RUNPOD_MONTHLY_LIMIT, RUNPOD_MAX_JOB_COST env vars to change",
+        },
+    }
+
+
 # ─── RunPod Serverless Configuration ─────────────────────────────────
 
 RUNPOD_BASE_URL = "https://api.runpod.ai/v2"
@@ -397,6 +519,17 @@ async def generate_lipsync_runpod(
             },
         }
 
+    # ─── Spending limit check ─────────────────────────
+    estimated_cost = estimate_runpod_cost(duration_seconds, gpu_tier)
+    limit_check = check_spending_limit(estimated_cost)
+    if not limit_check.get("allowed"):
+        return {
+            "success": False,
+            "error": f"Spending limit: {limit_check['reason']}",
+            "limit_blocked": True,
+            "spending": get_spending_summary(),
+        }
+
     # Build payload
     payload = build_simple_lipsync_payload(
         video_url=video_url,
@@ -490,6 +623,10 @@ async def generate_lipsync_runpod(
         cost = round(gpu_cost_per_sec * (execution_time / 1000), 6)  # execution_time in ms
 
     success = saved_file is not None and "error" not in (saved_file or {})
+
+    # Record spending for limit tracking
+    if success:
+        record_spending(cost)
     return {
         "success": success,
         "video": saved_file,

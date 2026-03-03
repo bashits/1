@@ -329,6 +329,21 @@ async def create_full_pipeline(req: FullPipelineRequest):
     )
 
 
+# ─── Spending Limits ─────────────────────────────────────────────────
+@router.get("/spending")
+async def get_spending():
+    """Get current RunPod spending limits and usage."""
+    from app.services.runpod_lipsync_service import get_spending_summary
+    return get_spending_summary()
+
+
+@router.post("/spending/check")
+async def check_spending(estimated_cost: float = 0.01):
+    """Check if a job with estimated cost would be allowed."""
+    from app.services.runpod_lipsync_service import check_spending_limit
+    return check_spending_limit(estimated_cost)
+
+
 # ─── File serving ───────────────────────────────────────────────────
 @router.get("/files/{file_type}/{filename}")
 async def serve_generated_file(file_type: str, filename: str):
