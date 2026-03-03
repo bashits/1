@@ -769,7 +769,11 @@ function IdentityLockPanel({ selected }: { selected: AIProfile }) {
   const [unlocking, setUnlocking] = useState(false);
   const [baseVideos, setBaseVideos] = useState<import("@/hooks/useApi").BaseVideo[]>([]);
   const [lockResult, setLockResult] = useState<import("@/hooks/useApi").IdentityLockResult | null>(null);
-  const isLocked = selected.identity_locked;
+  const [isLocked, setIsLocked] = useState(!!selected.identity_locked);
+
+  useEffect(() => {
+    setIsLocked(!!selected.identity_locked);
+  }, [selected.identity_locked]);
 
   useEffect(() => {
     if (isLocked) {
@@ -785,6 +789,7 @@ function IdentityLockPanel({ selected }: { selected: AIProfile }) {
       setLockResult(res);
       if (res.success) {
         setBaseVideos(res.videos || []);
+        setIsLocked(true);
       }
     } catch { /* ok */ }
     setLocking(false);
@@ -796,6 +801,7 @@ function IdentityLockPanel({ selected }: { selected: AIProfile }) {
       await api.unlockIdentity(selected.id);
       setBaseVideos([]);
       setLockResult(null);
+      setIsLocked(false);
     } catch { /* ok */ }
     setUnlocking(false);
   };
