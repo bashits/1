@@ -292,6 +292,14 @@ async def generate_content_calendar(
 
     await db.commit()
     logger.info(f"Generated {len(calendar_entries)} calendar entries for profile '{profile_name}'")
+
+    # Parse hashtags back to arrays for JSON response (stored as JSON strings in DB)
+    for entry in calendar_entries:
+        if isinstance(entry.get("hashtags"), str):
+            try:
+                entry["hashtags"] = json.loads(entry["hashtags"])
+            except Exception:
+                entry["hashtags"] = []
     return calendar_entries
 
 
