@@ -900,11 +900,13 @@ async def generate_video(
 
     profile = _parse_profile(row)
 
-    # ═══ BLOCK VIDEO GENERATION WITHOUT LoRA ═══
+    is_runpod = req.lipsync_model_key == "runpod_latentsync"
+
+    # ═══ BLOCK VIDEO GENERATION WITHOUT LoRA (skip for RunPod path) ═══
     lora_status = profile.get("lora_training_status", "not_trained")
-    if lora_status != "trained":
+    if not is_runpod and lora_status != "trained":
         status_messages = {
-            "not_trained": "Сначала обучите LoRA! Видео требует обученной модели для реалистичного лица.",
+            "not_trained": "Сначала обучите LoRA! Видео требует обученной модели для реалистичного лица. (Или используйте RunPod LatentSync)",
             "sourcing_photos": "LoRA: идёт поиск реальных фото модели... Подождите.",
             "generating_dataset": "LoRA: подготовка датасета... Подождите.",
             "training": "LoRA обучается... Подождите 5-15 минут.",
@@ -913,6 +915,43 @@ async def generate_video(
         msg = status_messages.get(lora_status, f"LoRA статус: {lora_status}. Сначала обучите LoRA.")
         raise HTTPException(status_code=400, detail=msg)
 
+    # ═══ RunPod LatentSync 1.6 path (cheap, no LoRA needed) ═══
+    if is_runpod:
+        from app.services.content_generation import run_full_pipeline
+        appearance = profile.get("appearance", {})
+        result = await run_full_pipeline(
+            text=req.text,
+            lipsync_model_key="runpod_latentsync",
+            voice_engine="kokoro",
+            moment_type=req.moment_type,
+            appearance=appearance,
+        )
+        total_cost = result.get("total_cost", 0)
+        if result.get("success"):
+            # Save to content_items
+            lipsync_step = next((s for s in result.get("steps", []) if s.get("step") == "lipsync"), None)
+            video_data = (lipsync_step or {}).get("result", {}).get("video", {})
+            await db.execute(
+                """INSERT INTO content_items (profile_id, content_type, title, prompt, file_path, file_url, cost, status, metadata)
+                   VALUES (?, 'video', ?, ?, ?, ?, ?, 'completed', ?)""",
+                (
+                    profile_id,
+                    f"Video: {req.moment_type} (RunPod)",
+                    req.text,
+                    video_data.get("file_path") if isinstance(video_data, dict) else None,
+                    video_data.get("url") if isinstance(video_data, dict) else None,
+                    total_cost,
+                    json.dumps({"moment_type": req.moment_type, "engine": "runpod_latentsync", "lipsync_model_key": "runpod_latentsync"}),
+                ),
+            )
+            await db.execute(
+                "UPDATE ai_profiles SET total_videos = total_videos + 1, total_cost = total_cost + ?, updated_at = datetime('now') WHERE id = ?",
+                (total_cost, profile_id),
+            )
+            await db.commit()
+        return result
+
+    # ═══ fal.ai path (existing) ═══
     # Step 1: Voice
     voice_result = await generate_girl_voice(
         profile_data=profile, text=req.text, moment_type=req.moment_type
