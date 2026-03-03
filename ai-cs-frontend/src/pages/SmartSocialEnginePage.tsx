@@ -95,7 +95,7 @@ export default function SmartSocialEnginePage() {
     if (!selectedProfile) return; setLoading(true);
     try {
       const result = await api.ssePrePostAnalysis(selectedProfile, queueId) as any;
-      const passed = result.approved || result.passed || result.status === "approved";
+      const passed = result.pass || result.approved || result.passed || result.status === "approved";
       const recs = result.recommendations || result.issues || [];
       alert(passed ? "Pre-post analysis PASSED! Ready to post." : "Pre-post analysis BLOCKED:\n" + (Array.isArray(recs) ? recs.join("\n") : JSON.stringify(recs)));
       await loadQueue(selectedProfile);
