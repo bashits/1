@@ -187,24 +187,23 @@ def build_simple_lipsync_payload(
     video_url: str,
     audio_url: str,
     use_face_detailer: bool = True,
-    guidance_scale: float = 2.0,
+    guidance_scale: float = 1.5,
+    inference_steps: int = 20,
+    seed: int = 1247,
 ) -> dict:
-    """Build simplified RunPod payload for LatentSync processing.
+    """Build RunPod payload for LatentSync 1.6 custom handler.
 
-    This is a simpler format that works with custom RunPod handlers
-    that don't use the full ComfyUI workflow system.
+    Our custom handler accepts video_url + audio_url directly
+    and runs LatentSync 1.6 inference (no ComfyUI).
+    Returns base64-encoded video in response.
     """
     return {
         "input": {
             "video_url": video_url,
             "audio_url": audio_url,
-            "model": "latentsync_v1.6",
             "guidance_scale": guidance_scale,
-            "use_face_detailer": use_face_detailer,
-            "output_format": "mp4",
-            "output_quality": 85,
-            "force_resolution": "512x512",
-            "force_fps": 25,
+            "inference_steps": inference_steps,
+            "seed": seed,
         },
     }
 
@@ -437,36 +436,49 @@ async def generate_lipsync_runpod(
             "engine": "runpod_latentsync_1.6",
         }
 
-    # Extract output video URL
+    # Extract output — our handler returns video_base64 or video_url
     output = result.get("output", {})
-    video_result_url = ""
-    if isinstance(output, dict):
-        video_result_url = output.get("video_url", output.get("url", ""))
-    elif isinstance(output, str):
-        video_result_url = output
-
-    # Download and save video locally
     saved_file = None
-    if video_result_url:
+
+    if isinstance(output, dict):
+        video_b64 = output.get("video_base64", "")
+        video_result_url = output.get("video_url", output.get("url", ""))
+
         fname = f"lipsync_runpod_{uuid.uuid4().hex[:8]}.mp4"
         fpath = GENERATED_DIR / "video" / fname
-        async with httpx.AsyncClient(timeout=120.0) as client:
+
+        if video_b64:
+            # Handler returned base64-encoded video — decode and save
             try:
-                vid_resp = await client.get(video_result_url)
-                if vid_resp.status_code == 200:
-                    fpath.write_bytes(vid_resp.content)
-                    saved_file = {
-                        "filename": fname,
-                        "file_path": str(fpath),
-                        "url": video_result_url,
-                    }
-                else:
-                    saved_file = {
-                        "url": video_result_url,
-                        "error": f"Download failed: HTTP {vid_resp.status_code}",
-                    }
+                fpath.write_bytes(base64.b64decode(video_b64))
+                saved_file = {
+                    "filename": fname,
+                    "file_path": str(fpath),
+                    "url": f"/generated/video/{fname}",
+                }
             except Exception as e:
-                saved_file = {"url": video_result_url, "error": str(e)}
+                saved_file = {"error": f"Base64 decode failed: {e}"}
+        elif video_result_url:
+            # Handler returned a URL — download it
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                try:
+                    vid_resp = await client.get(video_result_url)
+                    if vid_resp.status_code == 200:
+                        fpath.write_bytes(vid_resp.content)
+                        saved_file = {
+                            "filename": fname,
+                            "file_path": str(fpath),
+                            "url": video_result_url,
+                        }
+                    else:
+                        saved_file = {
+                            "url": video_result_url,
+                            "error": f"Download failed: HTTP {vid_resp.status_code}",
+                        }
+                except Exception as e:
+                    saved_file = {"url": video_result_url, "error": str(e)}
+        elif output.get("error"):
+            saved_file = {"error": output["error"]}
 
     # Calculate cost
     cost = estimate_runpod_cost(duration_seconds, gpu_tier)

@@ -1062,7 +1062,7 @@ async def run_full_pipeline(
         tts_result = await generate_voice_for_moment(
             text=text,
             moment_type=moment_type,
-            voice_key=voice_id,
+            persona=voice_id,
         )
     else:
         tts_result = await generate_tts(text, voice_id)

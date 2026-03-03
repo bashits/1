@@ -919,10 +919,13 @@ async def generate_video(
     if is_runpod:
         from app.services.content_generation import run_full_pipeline
         appearance = profile.get("appearance", {})
+        voice_config = profile.get("voice_config", {})
+        persona_id = voice_config.get("persona_id", "jessica_fire")
         result = await run_full_pipeline(
             text=req.text,
             lipsync_model_key="runpod_latentsync",
             voice_engine="kokoro",
+            voice_id=persona_id,
             moment_type=req.moment_type,
             appearance=appearance,
         )
