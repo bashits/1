@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse
 import os
 
 from app.database import init_db
-from app.routers import streams, moments, templates, clips, ab_tests, trends, analytics_router, ai_girl, ai_profiles, tool_registry, accounts, generation, clip_executor_router, montage_router, pipeline_router, dual_source_router, social_engine_router
+from app.routers import streams, moments, templates, clips, ab_tests, trends, analytics_router, ai_girl, ai_profiles, ai_profiles_utils, tool_registry, accounts, generation, clip_executor_router, montage_router, pipeline_router, dual_source_router, social_engine_router
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +117,7 @@ app.include_router(ab_tests.router)
 app.include_router(trends.router)
 app.include_router(analytics_router.router)
 app.include_router(ai_girl.router)
+app.include_router(ai_profiles_utils.router)  # utility routes BEFORE dynamic /{profile_id} routes
 app.include_router(ai_profiles.router)
 app.include_router(tool_registry.router)
 app.include_router(accounts.router)
