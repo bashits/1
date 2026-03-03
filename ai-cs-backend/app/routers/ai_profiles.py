@@ -463,11 +463,43 @@ async def create_profile(
     await db.commit()
     profile_id = cursor.lastrowid
 
-    # ═══ SKIP INITIAL PHOTO — REQUIRE LoRA TRAINING FIRST ═══
-    # We don't generate AI photos on creation anymore.
-    # The user must first train LoRA (using real model photos from Pexels),
-    # then ALL photos will be generated through LoRA for maximum realism.
+    # ═══ AUTO-GENERATE INITIAL PHOTO (if FAL_KEY available) ═══
+    # Generate one preview photo using standard fal.ai (no LoRA needed).
+    # LoRA training can be done later for maximum face consistency.
     first_photo_url = None
+    try:
+        fal_key = os.environ.get("FAL_KEY", "")
+        if fal_key:
+            from app.services.content_generation import generate_photo as fal_gen_photo, build_photo_prompt
+            photo_prompt_data = build_photo_prompt(
+                content_type="portrait",
+                appearance=appearance,
+                realism_level="maximum",
+            )
+            photo_result = await fal_gen_photo(
+                prompt=photo_prompt_data["prompt"],
+                negative_prompt=photo_prompt_data["negative_prompt"],
+                width=1024, height=1024, num_images=1,
+                model_key="flux2_realism",
+            )
+            if photo_result.get("success") and photo_result.get("images"):
+                first_photo_url = photo_result["images"][0].get("url")
+                if first_photo_url:
+                    # Save to gallery
+                    await db.execute(
+                        """INSERT INTO profile_gallery (profile_id, image_url, content_type, prompt, model_key, is_reference, cost, metadata)
+                           VALUES (?, ?, 'portrait', ?, 'flux2_realism', 0, ?, ?)""",
+                        (
+                            profile_id, first_photo_url,
+                            photo_prompt_data["prompt"],
+                            photo_result.get("cost_estimate", 0.021),
+                            json.dumps({"auto_generated": True, "model": "flux2_realism"}),
+                        ),
+                    )
+                    await db.commit()
+    except Exception as e:
+        import logging
+        logging.warning(f"Auto photo generation failed for profile {profile_id}: {e}")
 
     # ═══ AUTO-CREATE VOICE IDENTITY ═══
     try:
@@ -686,10 +718,11 @@ async def generate_photo(
 ):
     """Generate photo(s) for this girl.
 
-    LoRA-first approach:
+    Smart approach with fallback:
     - If LoRA is trained → use fal-ai/flux-lora (100% face consistency from real photos)
-    - If LoRA is NOT trained → block generation and require training first
-    - This ensures every generated photo looks like a real person, not AI art
+    - If LoRA is training → inform user and block
+    - If LoRA is NOT trained → allow standard fal.ai generation or reference-image generation
+    - This ensures photo generation always works, with best quality when LoRA is available
     """
     cursor = await db.execute("SELECT * FROM ai_profiles WHERE id = ?", (profile_id,))
     row = await cursor.fetchone()
@@ -711,17 +744,15 @@ async def generate_photo(
     trigger_word = profile.get("lora_trigger_word")
     lora_status = profile.get("lora_training_status", "not_trained")
 
-    # ═══ BLOCK GENERATION WITHOUT LoRA ═══
-    # LoRA must be trained first (on real model photos) for realistic results
-    if lora_status != "trained":
+    # ═══ BLOCK ONLY IF LoRA IS ACTIVELY TRAINING ═══
+    # Allow generation without LoRA (standard fal.ai or reference images as fallback)
+    if lora_status in ("generating_dataset", "sourcing_photos", "training"):
         status_messages = {
-            "not_trained": "Сначала обучите LoRA! Нажмите 'Обучить LoRA' в табе Обзор. Это обучит модель на реальных фото модели для максимального реализма.",
             "generating_dataset": "LoRA: идёт поиск реальных фото модели... Подождите 1-2 минуты.",
             "sourcing_photos": "LoRA: идёт поиск реальных фото модели в открытом доступе... Подождите.",
-            "training": "LoRA обучается... Подождите 5-15 минут. После этого генерация будет доступна.",
-            "failed": "LoRA обучение не удалось. Попробуйте обучить заново.",
+            "training": "LoRA обучается... Подождите 5-15 минут. После этого генерация будет доступна с максимальным реализмом.",
         }
-        msg = status_messages.get(lora_status, f"LoRA статус: {lora_status}. Сначала обучите LoRA.")
+        msg = status_messages.get(lora_status, f"LoRA статус: {lora_status}. Подождите.")
         raise HTTPException(
             status_code=400,
             detail=msg,
@@ -730,7 +761,7 @@ async def generate_photo(
     used_reference_images = False
     used_lora = False
 
-    # LoRA-based generation (face identity from real model photos)
+    # Priority 1: LoRA-based generation (face identity from real model photos)
     if req.use_lora and lora_url and trigger_word and lora_status == "trained":
         appearance = profile.get("appearance", {})
         if req.prompt:

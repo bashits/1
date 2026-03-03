@@ -1084,13 +1084,28 @@ async def run_full_pipeline(
     else:
         results["steps"].append({"step": "base_video", "source": "provided", "url": video_url})
 
-    # ═══ STEP 3: Generate lipsync with LatentSync 1.6 on RunPod ═══
+    # ═══ STEP 3: Generate lipsync ═══
+    # Try RunPod LatentSync first (cheapest), fall back to fal.ai models
     audio_url = audio_path  # RunPod service handles local paths
+
+    runpod_key = os.environ.get("RUNPOD_API_KEY", "")
+    runpod_endpoint = os.environ.get("RUNPOD_ENDPOINT_ID", "")
+    fal_key = _get_fal_key()
+
+    if runpod_key and runpod_endpoint:
+        lipsync_model = "runpod_latentsync"
+    elif fal_key:
+        # Fallback to fal.ai LatentSync (more expensive but no RunPod needed)
+        lipsync_model = "latentsync"
+    else:
+        results["success"] = False
+        results["error"] = "No lipsync engine configured. Set RUNPOD_API_KEY+RUNPOD_ENDPOINT_ID or FAL_KEY."
+        return results
 
     lipsync_result = await generate_lipsync_video(
         image_url=video_url,
         audio_url=audio_url,
-        model_key="runpod_latentsync",
+        model_key=lipsync_model,
     )
     results["steps"].append({"step": "lipsync", "result": lipsync_result, "engine": "runpod"})
     results["total_cost"] += lipsync_result.get("cost_estimate", 0)
