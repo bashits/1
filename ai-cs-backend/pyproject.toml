@@ -20,6 +20,7 @@ static-ffmpeg = "^3.0"
 beautifulsoup4 = "^4.14.3"
 lxml = "^6.0.2"
 fal-client = "^0.13.1"
+pytrends = "^4.9.2"
 
 
 [build-system]

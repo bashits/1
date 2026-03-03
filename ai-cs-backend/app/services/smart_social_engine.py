@@ -17,17 +17,259 @@ CRITICAL: The system won't execute any post without:
 - All chain components healthy
 """
 
+import asyncio
 import json
 import logging
 import math
 import random
 import time
+import traceback
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 import aiosqlite
+import httpx
 
 logger = logging.getLogger("smart_social_engine")
+
+# ══════════════════════════════════════════════════════════════════════
+# LIVE DATA FETCHER — real-time trend data from Google Trends + web
+# ══════════════════════════════════════════════════════════════════════
+
+# In-memory cache for live fetched data (avoids hammering APIs)
+_live_cache: dict = {}
+_LIVE_CACHE_TTL = 3600  # 1 hour cache for live data
+
+
+async def _fetch_google_trends(niche: str, platform: str, region: str = "US") -> dict:
+    """Fetch real trending data from Google Trends via pytrends.
+
+    Returns dict with:
+    - related_queries: list of trending search queries
+    - rising_queries: list of rising/breakout queries
+    - interest_over_time: recent interest scores
+    """
+    cache_key = f"gtrends_{niche}_{platform}_{region}"
+    cached = _live_cache.get(cache_key)
+    if cached and (time.time() - cached["ts"]) < _LIVE_CACHE_TTL:
+        logger.info("Using cached Google Trends data for %s/%s", niche, platform)
+        return cached["data"]
+
+    result = {
+        "related_queries": [],
+        "rising_queries": [],
+        "trending_topics": [],
+        "source": "google_trends",
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    # Map niche+platform to search keywords
+    search_keywords = {
+        "gaming": {
+            "instagram": ["gaming reels", "gamer girl instagram", "gaming clips"],
+            "tiktok": ["gaming tiktok", "gamer girl tiktok", "gaming clips viral"],
+        },
+        "lifestyle": {
+            "instagram": ["lifestyle reels", "aesthetic instagram", "day in my life"],
+            "tiktok": ["lifestyle tiktok", "grwm tiktok", "aesthetic vlog"],
+        },
+        "beauty": {
+            "instagram": ["beauty reels", "makeup tutorial", "skincare routine"],
+            "tiktok": ["beauty tiktok", "makeup tutorial viral", "skincare tiktok"],
+        },
+        "fitness": {
+            "instagram": ["fitness reels", "workout motivation", "gym girl"],
+            "tiktok": ["fitness tiktok", "workout tiktok", "gym motivation"],
+        },
+        "tech": {
+            "instagram": ["tech reels", "gadget review", "tech unboxing"],
+            "tiktok": ["tech tiktok", "gadget tiktok", "tech review viral"],
+        },
+    }
+
+    keywords = search_keywords.get(niche, search_keywords["gaming"]).get(
+        platform, search_keywords["gaming"]["instagram"]
+    )
+
+    try:
+        # Run pytrends in a thread pool (it's synchronous)
+        from pytrends.request import TrendReq
+
+        def _fetch_sync():
+            pytrends = TrendReq(hl="en-US", tz=300, timeout=(10, 25))
+            all_related = []
+            all_rising = []
+
+            for kw in keywords[:2]:  # Limit to 2 keywords to avoid rate limiting
+                try:
+                    pytrends.build_payload([kw], cat=0, timeframe="now 7-d", geo=region)
+
+                    # Get related queries
+                    related = pytrends.related_queries()
+                    if kw in related:
+                        top_df = related[kw].get("top")
+                        rising_df = related[kw].get("rising")
+
+                        if top_df is not None and not top_df.empty:
+                            for _, row in top_df.head(10).iterrows():
+                                all_related.append({
+                                    "query": row["query"],
+                                    "value": int(row["value"]) if "value" in row else 0,
+                                })
+
+                        if rising_df is not None and not rising_df.empty:
+                            for _, row in rising_df.head(10).iterrows():
+                                all_rising.append({
+                                    "query": row["query"],
+                                    "value": str(row["value"]) if "value" in row else "0",
+                                })
+
+                    time.sleep(1)  # Rate limit protection
+                except Exception as e:
+                    logger.warning("pytrends query failed for '%s': %s", kw, e)
+                    continue
+
+            return all_related, all_rising
+
+        loop = asyncio.get_event_loop()
+        related, rising = await loop.run_in_executor(None, _fetch_sync)
+
+        result["related_queries"] = related
+        result["rising_queries"] = rising
+
+        # Extract trending topics from queries
+        trending_topics = []
+        for q in (related + rising)[:15]:
+            topic = q["query"].strip()
+            if topic and len(topic) > 2:
+                trending_topics.append(topic)
+        result["trending_topics"] = trending_topics
+
+        logger.info(
+            "Fetched %d related + %d rising queries from Google Trends for %s/%s",
+            len(related), len(rising), niche, platform,
+        )
+
+    except Exception as e:
+        logger.error("Google Trends fetch failed: %s\n%s", e, traceback.format_exc())
+        result["error"] = str(e)
+
+    _live_cache[cache_key] = {"ts": time.time(), "data": result}
+    return result
+
+
+async def _fetch_live_hashtags(niche: str, platform: str) -> list:
+    """Fetch live trending hashtags via public web endpoints.
+
+    Uses multiple sources with fallback chain.
+    """
+    cache_key = f"hashtags_{niche}_{platform}"
+    cached = _live_cache.get(cache_key)
+    if cached and (time.time() - cached["ts"]) < _LIVE_CACHE_TTL:
+        return cached["data"]
+
+    live_tags = []
+
+    # Source 1: Try to get real hashtag data from RapidAPI/public endpoints
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            # Use a public hashtag suggestion endpoint
+            niche_seeds = {
+                "gaming": ["gaming", "gamergirl", "esports"],
+                "lifestyle": ["lifestyle", "aesthetic", "dailylife"],
+                "beauty": ["beauty", "makeup", "skincare"],
+                "fitness": ["fitness", "workout", "gym"],
+                "tech": ["tech", "gadget", "coding"],
+            }
+            seeds = niche_seeds.get(niche, niche_seeds["gaming"])
+
+            for seed in seeds:
+                try:
+                    # Instagram hashtag autocomplete (public endpoint)
+                    if platform == "instagram":
+                        resp = await client.get(
+                            f"https://www.instagram.com/web/search/topsearch/?query=%23{seed}",
+                            headers={
+                                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                                "Accept": "application/json",
+                            },
+                        )
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            hashtags = data.get("hashtags", [])
+                            for ht in hashtags[:5]:
+                                tag_name = ht.get("hashtag", {}).get("name", "")
+                                media_count = ht.get("hashtag", {}).get("media_count", 0)
+                                if tag_name:
+                                    live_tags.append({
+                                        "tag": f"#{tag_name}",
+                                        "posts": media_count,
+                                        "source": "instagram_api",
+                                    })
+                except Exception as e:
+                    logger.debug("Hashtag fetch for seed '%s' failed: %s", seed, e)
+                    continue
+
+    except Exception as e:
+        logger.warning("Live hashtag fetch failed: %s", e)
+
+    _live_cache[cache_key] = {"ts": time.time(), "data": live_tags}
+    return live_tags
+
+
+async def _fetch_trending_sounds_live(platform: str, niche: str) -> list:
+    """Try to fetch live trending sounds data.
+
+    Falls back to curated list if live fetch fails, but marks data source.
+    """
+    cache_key = f"sounds_{platform}_{niche}"
+    cached = _live_cache.get(cache_key)
+    if cached and (time.time() - cached["ts"]) < _LIVE_CACHE_TTL:
+        return cached["data"]
+
+    live_sounds = []
+
+    # Try Google Trends for trending music
+    try:
+        from pytrends.request import TrendReq
+
+        def _fetch_music_sync():
+            pytrends = TrendReq(hl="en-US", tz=300, timeout=(10, 25))
+            music_keywords = {
+                "gaming": "trending gaming music 2025",
+                "lifestyle": "trending aesthetic music 2025",
+                "beauty": "trending beauty sounds 2025",
+            }
+            kw = music_keywords.get(niche, "trending music 2025")
+            try:
+                pytrends.build_payload([kw], cat=0, timeframe="now 7-d", geo="US")
+                related = pytrends.related_queries()
+                if kw in related and related[kw].get("top") is not None:
+                    df = related[kw]["top"]
+                    return [row["query"] for _, row in df.head(8).iterrows()]
+            except Exception:
+                pass
+            return []
+
+        loop = asyncio.get_event_loop()
+        music_queries = await loop.run_in_executor(None, _fetch_music_sync)
+
+        for q in music_queries:
+            live_sounds.append({"name": q, "source": "google_trends", "trending": True})
+
+    except Exception as e:
+        logger.debug("Live sounds fetch failed: %s", e)
+
+    # If we got live data, use it
+    if live_sounds:
+        _live_cache[cache_key] = {"ts": time.time(), "data": live_sounds}
+        return live_sounds
+
+    # Fallback to curated list (but marked as fallback)
+    fallback = _get_trending_sounds(platform, niche)
+    result = [{"name": s, "source": "curated_fallback", "trending": False} for s in fallback]
+    _live_cache[cache_key] = {"ts": time.time(), "data": result}
+    return result
 
 # ══════════════════════════════════════════════════════════════════════
 # CONSTANTS & KNOWLEDGE BASE
@@ -333,6 +575,9 @@ class TrendIntelligenceEngine:
     ) -> dict:
         """Run full trend analysis for a specific platform + format combo.
 
+        UPGRADED: Now fetches LIVE data from Google Trends + web sources.
+        Falls back to curated knowledge base only if live fetch fails.
+
         Returns trend snapshot with hashtags, timing, topics, and engagement benchmarks.
         """
         logger.info(
@@ -341,12 +586,30 @@ class TrendIntelligenceEngine:
         )
 
         now = datetime.now(timezone.utc)
+        data_sources_used = []
 
-        # Build trend data from knowledge base + any learned patterns
+        # ── STEP 1: Fetch LIVE trend data from Google Trends ──
+        live_trends = await _fetch_google_trends(niche, platform, region)
+        live_trending_topics = live_trends.get("trending_topics", [])
+        live_related = live_trends.get("related_queries", [])
+        live_rising = live_trends.get("rising_queries", [])
+
+        if live_trending_topics:
+            data_sources_used.append("google_trends_live")
+            logger.info("Got %d live trending topics from Google Trends", len(live_trending_topics))
+        else:
+            data_sources_used.append("google_trends_unavailable")
+
+        # ── STEP 2: Fetch LIVE hashtags ──
+        live_hashtag_data = await _fetch_live_hashtags(niche, platform)
+        live_hashtags_from_web = [h["tag"] for h in live_hashtag_data if h.get("tag")]
+        if live_hashtags_from_web:
+            data_sources_used.append("live_hashtags")
+
+        # ── STEP 3: Build hashtag selection (LIVE + curated mix) ──
         hashtag_pool = US_HASHTAG_POOLS.get(niche, US_HASHTAG_POOLS["gaming"])
         platform_hashtags = hashtag_pool.get(platform, hashtag_pool.get("instagram", {}))
 
-        # Mix hashtags: 30% evergreen + 30% trending + 20% niche + 20% growth
         evergreen = platform_hashtags.get("evergreen", [])
         trending = platform_hashtags.get("trending", [])
         niche_tags = platform_hashtags.get("niche", [])
@@ -355,9 +618,18 @@ class TrendIntelligenceEngine:
         format_spec = CONTENT_FORMATS.get(platform, {}).get(content_format, {})
         optimal_count = format_spec.get("optimal_hashtags", 15)
 
+        # If we have live hashtags, mix them in (replace some trending ones)
+        if live_hashtags_from_web:
+            # Merge live tags into trending pool, prioritizing live data
+            combined_trending = list(set(live_hashtags_from_web[:5] + trending))
+            trending = combined_trending
+            data_sources_used.append("hashtags_live_merged")
+        else:
+            data_sources_used.append("hashtags_curated_only")
+
         # Smart hashtag selection based on format
-        n_evergreen = max(1, int(optimal_count * 0.3))
-        n_trending = max(1, int(optimal_count * 0.3))
+        n_evergreen = max(1, int(optimal_count * 0.25))
+        n_trending = max(1, int(optimal_count * 0.35))  # More weight to trending
         n_niche = max(1, int(optimal_count * 0.2))
         n_growth = max(1, int(optimal_count * 0.2))
 
@@ -368,7 +640,10 @@ class TrendIntelligenceEngine:
             + random.sample(growth, min(n_growth, len(growth)))
         )
 
-        # Get optimal posting times
+        # Deduplicate
+        selected_hashtags = list(dict.fromkeys(selected_hashtags))
+
+        # ── STEP 4: Get optimal posting times ──
         platform_times = US_OPTIMAL_TIMES.get(platform, {}).get(content_format, {})
         best_hours = platform_times.get("best_hours_utc", [14, 17, 20])
         best_days = platform_times.get("best_days", ["tuesday", "wednesday", "thursday"])
@@ -380,18 +655,39 @@ class TrendIntelligenceEngine:
         if learned_times and learned_times.get("confidence", 0) > 0.6:
             best_hours = learned_times.get("value", {}).get("hours", best_hours)
             best_days = learned_times.get("value", {}).get("days", best_days)
+            data_sources_used.append("learned_posting_times")
             logger.info("Using LEARNED posting times (confidence=%.2f)", learned_times["confidence"])
 
-        # Get trending topics
-        topics = CONTENT_TOPICS.get(niche, CONTENT_TOPICS["gaming"]).get(
-            content_format, CONTENT_TOPICS["gaming"]["reels"]
-        )
-        trending_topics = random.sample(topics, min(5, len(topics)))
+        # ── STEP 5: Get trending topics (LIVE first, fallback to curated) ──
+        if live_trending_topics:
+            # Use live topics + some curated for variety
+            curated_topics = CONTENT_TOPICS.get(niche, CONTENT_TOPICS["gaming"]).get(
+                content_format, CONTENT_TOPICS["gaming"]["reels"]
+            )
+            curated_sample = random.sample(curated_topics, min(2, len(curated_topics)))
+            trending_topics = live_trending_topics[:5] + curated_sample
+            data_sources_used.append("topics_live")
+        else:
+            # Fallback to curated only
+            topics = CONTENT_TOPICS.get(niche, CONTENT_TOPICS["gaming"]).get(
+                content_format, CONTENT_TOPICS["gaming"]["reels"]
+            )
+            trending_topics = random.sample(topics, min(5, len(topics)))
+            data_sources_used.append("topics_curated_fallback")
 
-        # Engagement benchmarks (based on niche + platform research)
+        # ── STEP 6: Get trending sounds (LIVE first) ──
+        live_sounds = await _fetch_trending_sounds_live(platform, niche)
+        if live_sounds and live_sounds[0].get("source") != "curated_fallback":
+            trending_sounds_list = [s["name"] for s in live_sounds[:8]]
+            data_sources_used.append("sounds_live")
+        else:
+            trending_sounds_list = _get_trending_sounds(platform, niche)
+            data_sources_used.append("sounds_curated_fallback")
+
+        # ── STEP 7: Engagement benchmarks ──
         benchmarks = _get_engagement_benchmarks(platform, content_format, niche)
 
-        # Build trend snapshot
+        # ── BUILD final trend snapshot ──
         trend_data = {
             "platform": platform,
             "content_format": content_format,
@@ -399,14 +695,21 @@ class TrendIntelligenceEngine:
             "region": region,
             "analyzed_at": now.isoformat(),
             "expires_at": (now + timedelta(seconds=TrendIntelligenceEngine.TREND_TTL_SECONDS)).isoformat(),
+            "data_sources": data_sources_used,
             "top_hashtags": selected_hashtags,
+            "live_hashtag_data": live_hashtag_data[:10] if live_hashtag_data else [],
             "best_posting_times": {
                 "hours_utc": best_hours,
                 "days": best_days,
                 "timezone_ref": "UTC (US Eastern = UTC-5)",
             },
             "trending_topics": trending_topics,
-            "trending_sounds": _get_trending_sounds(platform, niche),
+            "google_trends_data": {
+                "related_queries": live_related[:10],
+                "rising_queries": live_rising[:10],
+                "fetched_at": live_trends.get("fetched_at"),
+            },
+            "trending_sounds": trending_sounds_list,
             "engagement_benchmarks": benchmarks,
             "competitor_insights": _get_competitor_insights(niche, platform),
             "format_specs": format_spec,
@@ -525,7 +828,11 @@ class ContentStrategyEngine:
         days: int = 7,
         niche: str = "gaming",
     ) -> dict:
-        """Generate a multi-day content plan across all platforms."""
+        """Generate a multi-day content plan across all platforms.
+
+        UPGRADED: Now pulls live trend data from TrendIntelligenceEngine
+        to use real trending topics and hashtags in the content plan.
+        """
         logger.info("Generating %d-day content plan for profile %d", days, profile_id)
 
         # Get engine config
@@ -536,6 +843,31 @@ class ContentStrategyEngine:
 
         max_posts_per_day = strategy.get("max_posts_per_day", 3)
         now = datetime.now(timezone.utc)
+        data_sources = []
+
+        # ── Pre-fetch live trend data for all platform/format combos ──
+        live_trend_cache: dict = {}
+        for platform in platforms:
+            for fmt in CONTENT_FORMATS.get(platform, {}):
+                try:
+                    latest = await TrendIntelligenceEngine.get_latest_trends(
+                        db, profile_id, platform=platform, content_format=fmt
+                    )
+                    if latest:
+                        td = latest[0].get("trend_data")
+                        if isinstance(td, str):
+                            try:
+                                td = json.loads(td)
+                            except Exception:
+                                td = {}
+                        live_trend_cache[f"{platform}_{fmt}"] = td
+                except Exception as e:
+                    logger.debug("Could not pre-fetch trends for %s/%s: %s", platform, fmt, e)
+
+        if live_trend_cache:
+            data_sources.append("live_trends_from_db")
+        else:
+            data_sources.append("curated_only")
 
         plan = {
             "profile_id": profile_id,
@@ -543,6 +875,7 @@ class ContentStrategyEngine:
             "days": days,
             "niche": niche,
             "platforms": platforms,
+            "data_sources": data_sources,
             "entries": [],
         }
 
@@ -563,31 +896,49 @@ class ContentStrategyEngine:
                     count = max(1, round(max_posts_per_day * ratio))
                     count = min(count, posts_remaining)
 
+                    # Get live trend data for this platform/format
+                    cached_trend = live_trend_cache.get(f"{platform}_{fmt}", {})
+                    live_topics = cached_trend.get("trending_topics", [])
+                    live_hashtags = cached_trend.get("top_hashtags", [])
+                    live_hours = cached_trend.get("best_posting_times", {}).get("hours_utc", [])
+
                     for _ in range(count):
                         if posts_remaining <= 0:
                             break
 
-                        # Get trending topics for this format
-                        topics = CONTENT_TOPICS.get(niche, CONTENT_TOPICS["gaming"]).get(
-                            fmt, CONTENT_TOPICS["gaming"]["reels"]
-                        )
-                        topic = random.choice(topics)
+                        # Get trending topics — prefer LIVE, fallback to curated
+                        if live_topics:
+                            topic = random.choice(live_topics)
+                        else:
+                            topics = CONTENT_TOPICS.get(niche, CONTENT_TOPICS["gaming"]).get(
+                                fmt, CONTENT_TOPICS["gaming"]["reels"]
+                            )
+                            topic = random.choice(topics)
 
-                        # Get hashtags
-                        hashtag_pool = US_HASHTAG_POOLS.get(niche, US_HASHTAG_POOLS["gaming"])
-                        platform_tags = hashtag_pool.get(platform, {})
-                        format_spec = CONTENT_FORMATS.get(platform, {}).get(fmt, {})
-                        optimal_count = format_spec.get("optimal_hashtags", 10)
+                        # Get hashtags — prefer LIVE, fallback to curated pool
+                        if live_hashtags:
+                            hashtags = random.sample(
+                                live_hashtags,
+                                min(10, len(live_hashtags))
+                            )
+                        else:
+                            hashtag_pool = US_HASHTAG_POOLS.get(niche, US_HASHTAG_POOLS["gaming"])
+                            platform_tags = hashtag_pool.get(platform, {})
+                            format_spec = CONTENT_FORMATS.get(platform, {}).get(fmt, {})
+                            optimal_count = format_spec.get("optimal_hashtags", 10)
 
-                        all_tags = []
-                        for category in ["evergreen", "trending", "niche", "growth"]:
-                            all_tags.extend(platform_tags.get(category, []))
-                        hashtags = random.sample(all_tags, min(optimal_count, len(all_tags)))
+                            all_tags = []
+                            for category in ["evergreen", "trending", "niche", "growth"]:
+                                all_tags.extend(platform_tags.get(category, []))
+                            hashtags = random.sample(all_tags, min(optimal_count, len(all_tags)))
 
-                        # Get optimal time
-                        times = US_OPTIMAL_TIMES.get(platform, {}).get(fmt, {})
-                        best_hours = times.get("best_hours_utc", [14, 17, 20])
-                        hour = random.choice(best_hours)
+                        # Get optimal time — prefer LIVE/learned, fallback to curated
+                        if live_hours:
+                            hour = random.choice(live_hours)
+                        else:
+                            times = US_OPTIMAL_TIMES.get(platform, {}).get(fmt, {})
+                            best_hours = times.get("best_hours_utc", [14, 17, 20])
+                            hour = random.choice(best_hours)
                         minute = random.randint(0, 59)
 
                         scheduled_at = target_date.replace(
@@ -606,6 +957,7 @@ class ContentStrategyEngine:
                             "scheduled_at": scheduled_at.isoformat(),
                             "day": day_name,
                             "status": "planned",
+                            "data_source": "live" if live_topics else "curated",
                         }
                         day_entries.append(entry)
                         posts_remaining -= 1
@@ -936,8 +1288,13 @@ class EngagementEngine:
         niche: str = "gaming",
         count: int = 10,
         comment_style: str = None,
+        platform: str = "instagram",
     ) -> list:
-        """Generate a batch of smart comments for the target niche."""
+        """Generate a batch of smart comments for the target niche.
+
+        UPGRADED: Now pulls live trending topics from latest trend analysis
+        to generate contextually relevant comments tied to current trends.
+        """
         logger.info("Generating %d comments for profile %d niche=%s", count, profile_id, niche)
 
         niche_templates = COMMENT_TEMPLATES.get(niche, COMMENT_TEMPLATES["gaming"])
@@ -947,23 +1304,92 @@ class EngagementEngine:
         else:
             styles = list(niche_templates.keys())
 
+        # ── Fetch latest trending topics for context-aware comments ──
+        trending_context = []
+        try:
+            latest_trends = await TrendIntelligenceEngine.get_latest_trends(
+                db, profile_id, platform=platform
+            )
+            if latest_trends:
+                for trend_entry in latest_trends[:3]:
+                    td = trend_entry.get("trend_data")
+                    if isinstance(td, str):
+                        try:
+                            td = json.loads(td)
+                        except Exception:
+                            td = {}
+                    if isinstance(td, dict):
+                        topics = td.get("trending_topics", [])
+                        trending_context.extend(topics[:3])
+                # Also pull from Google Trends data
+                for trend_entry in latest_trends[:1]:
+                    td = trend_entry.get("trend_data")
+                    if isinstance(td, str):
+                        try:
+                            td = json.loads(td)
+                        except Exception:
+                            td = {}
+                    if isinstance(td, dict):
+                        gt = td.get("google_trends_data", {})
+                        for rq in gt.get("related_queries", [])[:3]:
+                            trending_context.append(rq.get("query", ""))
+        except Exception as e:
+            logger.debug("Could not fetch trending context for comments: %s", e)
+
+        # Deduplicate trending context
+        trending_context = list(dict.fromkeys([t for t in trending_context if t]))
+
         comments = []
+        used_templates = set()  # Track to avoid exact duplicates
+
         for i in range(count):
             style = random.choice(styles)
             template = random.choice(niche_templates[style])
+
+            # Try to avoid exact duplicate templates
+            attempts = 0
+            while template in used_templates and attempts < 5:
+                template = random.choice(niche_templates[style])
+                attempts += 1
+            used_templates.add(template)
+
             emoji = random.choice(COMMENT_EMOJIS)
             comment_text = template.replace("{emoji}", emoji)
 
             # Add variation — sometimes add extra words
             if random.random() < 0.3:
-                extras = ["honestly", "literally", "fr fr", "no cap", "istg", "ngl"]
+                extras = ["honestly", "literally", "fr fr", "no cap", "istg", "ngl",
+                          "lowkey", "deadass", "bro", "sis", "bestie"]
                 comment_text = random.choice(extras) + " " + comment_text
+
+            # Context injection — sometimes reference a trending topic
+            if trending_context and random.random() < 0.4:
+                topic = random.choice(trending_context)
+                context_additions = [
+                    f" (giving {topic} vibes)",
+                    f" this is so {topic} coded",
+                    f" reminds me of {topic}",
+                    f" {topic} energy fr",
+                ]
+                comment_text += random.choice(context_additions)
+
+            # Typo/casual variation (makes comments look more human)
+            if random.random() < 0.15:
+                casual_edits = [
+                    (lambda t: t.lower()),
+                    (lambda t: t + "!!"),
+                    (lambda t: t.replace("!", "!!!")),
+                    (lambda t: t + " lol"),
+                ]
+                comment_text = random.choice(casual_edits)(comment_text)
 
             comment = {
                 "text": comment_text,
                 "style": style,
                 "niche": niche,
+                "platform": platform,
                 "region": "US",
+                "trending_context": trending_context[:3] if trending_context else [],
                 "generated_at": datetime.now(timezone.utc).isoformat(),
             }
             comments.append(comment)
@@ -973,7 +1399,7 @@ class EngagementEngine:
                 """INSERT INTO engagement_actions
                    (profile_id, platform, action_type, content, niche, region, status)
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (profile_id, "instagram", "comment", comment_text, niche, "US", "generated"),
+                (profile_id, platform, "comment", comment_text, niche, "US", "generated"),
             )
 
         await db.commit()
