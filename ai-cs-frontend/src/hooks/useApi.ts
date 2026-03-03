@@ -245,6 +245,40 @@ export const api = {
   executeFromMoment: (data: MomentClipRequest) =>
     apiFetch("/api/clip-executor/execute-moment", { method: "POST", body: JSON.stringify(data) }),
   getProcessedClips: () => apiFetch<ProcessedClipsList>("/api/clip-executor/processed-clips"),
+
+  // Smart Social Engine (SSE)
+  sseInitialize: (profileId: number, niche?: string, region?: string) =>
+    apiFetch<SSEInitResult>(`/api/social-engine/${profileId}/initialize`, { method: "POST", body: JSON.stringify({ niche: niche || "gaming", region: region || "US" }) }),
+  sseDashboard: (profileId: number) =>
+    apiFetch<SSEDashboard>(`/api/social-engine/${profileId}/dashboard`),
+  sseAnalyzeTrends: (profileId: number, platform: string, contentFormat: string, niche?: string) =>
+    apiFetch<SSETrendResult>(`/api/social-engine/${profileId}/analyze-trends`, { method: "POST", body: JSON.stringify({ platform, content_format: contentFormat, niche: niche || "gaming", region: "US" }) }),
+  sseGetTrends: (profileId: number, platform?: string) =>
+    apiFetch<SSETrendEntry[]>(`/api/social-engine/${profileId}/trends${platform ? `?platform=${platform}` : ""}`),
+  sseGeneratePlan: (profileId: number, days?: number, niche?: string) =>
+    apiFetch<SSEPlanResult>(`/api/social-engine/${profileId}/generate-plan`, { method: "POST", body: JSON.stringify({ days: days || 7, niche: niche || "gaming" }) }),
+  sseGetPlan: (profileId: number, platform?: string, status?: string) =>
+    apiFetch<SSEQueueEntry[]>(`/api/social-engine/${profileId}/plan${platform || status ? `?${platform ? `platform=${platform}` : ""}${status ? `&status=${status}` : ""}` : ""}`),
+  sseQueuePost: (profileId: number, data: { platform: string; content_format: string; caption?: string; hashtags?: string[] }) =>
+    apiFetch<{ status: string }>(`/api/social-engine/${profileId}/queue-post`, { method: "POST", body: JSON.stringify(data) }),
+  sseGetQueue: (profileId: number, platform?: string, status?: string) =>
+    apiFetch<SSEQueueEntry[]>(`/api/social-engine/${profileId}/queue${platform || status ? `?${platform ? `platform=${platform}` : ""}${status ? `&status=${status}` : ""}` : ""}`),
+  ssePrePostAnalysis: (profileId: number, queueId: number) =>
+    apiFetch<SSEPrePostResult>(`/api/social-engine/${profileId}/pre-post-analysis/${queueId}`, { method: "POST" }),
+  sseExecutePost: (profileId: number, queueId: number) =>
+    apiFetch<SSEExecuteResult>(`/api/social-engine/${profileId}/execute-post/${queueId}`, { method: "POST" }),
+  sseGenerateComments: (profileId: number, niche?: string, count?: number, style?: string) =>
+    apiFetch<SSEComment[]>(`/api/social-engine/${profileId}/engage`, { method: "POST", body: JSON.stringify({ niche: niche || "gaming", count: count || 10, comment_style: style || null }) }),
+  sseGetEngagementLog: (profileId: number) =>
+    apiFetch<SSEEngagementEntry[]>(`/api/social-engine/${profileId}/engagement-log`),
+  sseRecordPerformance: (profileId: number, data: SSERecordPerfReq) =>
+    apiFetch<{ recorded: boolean }>(`/api/social-engine/${profileId}/record-performance`, { method: "POST", body: JSON.stringify(data) }),
+  sseGetLearning: (profileId: number) =>
+    apiFetch<SSELearningEntry[]>(`/api/social-engine/${profileId}/learning`),
+  sseChainHealth: (profileId: number) =>
+    apiFetch<SSEChainStatus>(`/api/social-engine/${profileId}/chain-health`),
+  sseHealChain: (profileId: number) =>
+    apiFetch<SSEHealResult>(`/api/social-engine/${profileId}/heal`, { method: "POST" }),
 };
 
 // Types
@@ -1245,6 +1279,8 @@ export interface IdentityLockResult {
   pexels_user_id?: number;
   message: string;
   already_locked?: boolean;
+  videos?: BaseVideo[];
+  photographer?: string;
 }
 
 export interface BaseVideo {
@@ -1259,6 +1295,8 @@ export interface BaseVideo {
   height: number;
   pexels_user: string;
   pexels_user_id: number;
+  pexels_video_id?: number;
+  photographer?: string;
   is_primary: number;
   use_count: number;
   quality_score: number;
@@ -1360,4 +1398,149 @@ export interface StreamerStatsResponse {
     clip_potential?: number;
     followers?: number;
   }[];
+}
+
+// ── Smart Social Engine (SSE) Types ──────────────────────────────
+
+export interface SSEInitResult {
+  initialized: boolean;
+  profile_id: number;
+  config: Record<string, unknown>;
+  trend_analysis: Record<string, unknown>;
+  content_plan: Record<string, unknown>;
+  chain_status: SSEChainStatus;
+}
+
+export interface SSEDashboard {
+  profile_id: number;
+  config: Record<string, unknown> | null;
+  trends: { total: number; fresh: number; platforms: string[] };
+  queue: { total: number; queued: number; posted: number; failed: number };
+  engagement: { total: number; pending: number; completed: number };
+  learning: { patterns: number; avg_confidence: number };
+  chain: SSEChainStatus;
+}
+
+export interface SSETrendResult {
+  profile_id: number;
+  platform: string;
+  content_format: string;
+  trend_data: Record<string, unknown>;
+  top_hashtags: string[];
+  best_posting_times: string[];
+  trending_topics: string[];
+  trending_sounds: string[];
+  engagement_benchmarks: Record<string, unknown>;
+}
+
+export interface SSETrendEntry {
+  id: number;
+  platform: string;
+  content_format: string;
+  trend_data: Record<string, unknown>;
+  top_hashtags: string[];
+  best_posting_times: string[];
+  trending_topics: string[];
+  analyzed_at: string;
+  expires_at: string | null;
+}
+
+export interface SSEPlanResult {
+  profile_id: number;
+  days: number;
+  total_posts: number;
+  plan: SSEQueueEntry[];
+}
+
+export interface SSEQueueEntry {
+  id: number;
+  platform: string;
+  content_format: string;
+  caption: string | null;
+  hashtags: string[];
+  scheduled_at: string | null;
+  status: string;
+  pre_post_analysis: Record<string, unknown>;
+  posted_at: string | null;
+  post_url: string | null;
+  created_at: string;
+}
+
+export interface SSEPrePostResult {
+  queue_id: number;
+  passed: boolean;
+  checks: {
+    chain_healthy: boolean;
+    trends_fresh: boolean;
+    timing_optimal: boolean;
+    hashtags_valid: boolean;
+    caption_quality: boolean;
+  };
+  recommendations: string[];
+  optimal_time_suggestion: string | null;
+}
+
+export interface SSEExecuteResult {
+  queue_id: number;
+  status: string;
+  message: string;
+  post_url?: string;
+}
+
+export interface SSEComment {
+  id: number;
+  content: string;
+  niche: string;
+  style: string;
+  platform: string;
+  region: string;
+}
+
+export interface SSEEngagementEntry {
+  id: number;
+  action_type: string;
+  target_url: string | null;
+  content: string;
+  niche: string;
+  status: string;
+  created_at: string;
+}
+
+export interface SSERecordPerfReq {
+  queue_id: number;
+  views?: number;
+  likes?: number;
+  comments?: number;
+  shares?: number;
+  saves?: number;
+  reach?: number;
+  impressions?: number;
+}
+
+export interface SSELearningEntry {
+  id: number;
+  platform: string;
+  learning_type: string;
+  pattern_key: string;
+  pattern_value: Record<string, unknown>;
+  confidence: number;
+  data_points: number;
+  last_updated: string;
+}
+
+export interface SSEChainStatus {
+  healthy: boolean;
+  components: {
+    component: string;
+    status: string;
+    last_check: string;
+    error_count: number;
+    consecutive_failures: number;
+  }[];
+}
+
+export interface SSEHealResult {
+  healed: boolean;
+  actions: string[];
+  new_status: SSEChainStatus;
 }

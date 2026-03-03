@@ -1,6 +1,6 @@
 import { useState } from "react";
 import {
-  LayoutDashboard, Film, TrendingUp, Radio, UserCircle, Clapperboard, Menu, X
+  LayoutDashboard, Film, TrendingUp, Radio, UserCircle, Clapperboard, Menu, X, Zap
 } from "lucide-react";
 import Dashboard from "@/pages/Dashboard";
 import ClipsPage from "@/pages/ClipsPage";
@@ -8,6 +8,7 @@ import TrendsPage from "@/pages/TrendsPage";
 import StreamsPage from "@/pages/StreamsPage";
 import AIProfilesPage from "@/pages/AIProfilesPage";
 import MontagePage from "@/pages/MontagePage";
+import SmartSocialEnginePage from "@/pages/SmartSocialEnginePage";
 
 const NAV_ITEMS = [
   { id: "dashboard", label: "Главная", icon: LayoutDashboard },
@@ -16,6 +17,7 @@ const NAV_ITEMS = [
   { id: "trends", label: "Тренды", icon: TrendingUp },
   { id: "streams", label: "Стримы", icon: Radio },
   { id: "ai-profiles", label: "Девушки", icon: UserCircle },
+  { id: "sse", label: "SSE", icon: Zap },
 ];
 
 const PAGES: Record<string, React.FC> = {
@@ -25,6 +27,7 @@ const PAGES: Record<string, React.FC> = {
   trends: TrendsPage,
   streams: StreamsPage,
   "ai-profiles": AIProfilesPage,
+  "sse": SmartSocialEnginePage,
 };
 
 function App() {

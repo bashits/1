@@ -446,6 +446,141 @@ async def init_db():
         FOREIGN KEY (content_item_id) REFERENCES content_items(id) ON DELETE SET NULL
     );
 
+    -- ══════════════════════════════════════════════════════════════════
+    -- SMART SOCIAL ENGINE (SSE) — Intelligent Social Media Autopilot
+    -- ══════════════════════════════════════════════════════════════════
+
+    -- Engine config per profile (global settings for the SSE)
+    CREATE TABLE IF NOT EXISTS social_engine_config (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        profile_id INTEGER NOT NULL UNIQUE,
+        is_active INTEGER NOT NULL DEFAULT 0,
+        target_region TEXT NOT NULL DEFAULT 'US',
+        target_language TEXT NOT NULL DEFAULT 'en',
+        platforms TEXT NOT NULL DEFAULT '["instagram", "tiktok"]',
+        posting_strategy TEXT NOT NULL DEFAULT '{"min_hours_between_posts": 4, "max_posts_per_day": 3, "story_ratio": 0.4}',
+        content_mix TEXT NOT NULL DEFAULT '{"reels": 0.5, "stories": 0.3, "posts": 0.2}',
+        engagement_config TEXT NOT NULL DEFAULT '{"auto_comment": true, "comments_per_hour": 10, "target_niches": ["gaming", "lifestyle", "beauty"]}',
+        learning_config TEXT NOT NULL DEFAULT '{"adapt_frequency_hours": 24, "min_data_points": 5}',
+        chain_config TEXT NOT NULL DEFAULT '{"require_trend_analysis": true, "require_content_plan": true, "max_retries": 3, "self_heal": true}',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        FOREIGN KEY (profile_id) REFERENCES ai_profiles(id) ON DELETE CASCADE
+    );
+
+    -- Per-platform trend data (separate IG reels/stories/posts, TT videos)
+    CREATE TABLE IF NOT EXISTS platform_trends (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        profile_id INTEGER NOT NULL,
+        platform TEXT NOT NULL,
+        content_format TEXT NOT NULL,
+        trend_data TEXT NOT NULL DEFAULT '{}',
+        top_hashtags TEXT NOT NULL DEFAULT '[]',
+        best_posting_times TEXT NOT NULL DEFAULT '[]',
+        trending_topics TEXT NOT NULL DEFAULT '[]',
+        trending_sounds TEXT NOT NULL DEFAULT '[]',
+        competitor_analysis TEXT NOT NULL DEFAULT '{}',
+        engagement_benchmarks TEXT NOT NULL DEFAULT '{}',
+        region TEXT NOT NULL DEFAULT 'US',
+        analyzed_at TEXT NOT NULL DEFAULT (datetime('now')),
+        expires_at TEXT,
+        FOREIGN KEY (profile_id) REFERENCES ai_profiles(id) ON DELETE CASCADE
+    );
+
+    -- Unified posting queue with pre-post analysis
+    CREATE TABLE IF NOT EXISTS posting_queue (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        profile_id INTEGER NOT NULL,
+        platform TEXT NOT NULL,
+        content_format TEXT NOT NULL,
+        content_item_id INTEGER,
+        caption TEXT,
+        hashtags TEXT NOT NULL DEFAULT '[]',
+        scheduled_at TEXT,
+        pre_post_analysis TEXT NOT NULL DEFAULT '{}',
+        trend_snapshot_id INTEGER,
+        status TEXT NOT NULL DEFAULT 'queued',
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        error_log TEXT,
+        posted_at TEXT,
+        post_url TEXT,
+        post_id_external TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        FOREIGN KEY (profile_id) REFERENCES ai_profiles(id) ON DELETE CASCADE,
+        FOREIGN KEY (content_item_id) REFERENCES content_items(id) ON DELETE SET NULL
+    );
+
+    -- Engagement actions log (comments, likes)
+    CREATE TABLE IF NOT EXISTS engagement_actions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        profile_id INTEGER NOT NULL,
+        platform TEXT NOT NULL,
+        action_type TEXT NOT NULL,
+        target_url TEXT,
+        target_username TEXT,
+        content TEXT,
+        niche TEXT,
+        region TEXT NOT NULL DEFAULT 'US',
+        status TEXT NOT NULL DEFAULT 'pending',
+        result TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        FOREIGN KEY (profile_id) REFERENCES ai_profiles(id) ON DELETE CASCADE
+    );
+
+    -- Post performance tracking over time
+    CREATE TABLE IF NOT EXISTS performance_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        profile_id INTEGER NOT NULL,
+        posting_queue_id INTEGER,
+        platform TEXT NOT NULL,
+        content_format TEXT NOT NULL,
+        views INTEGER NOT NULL DEFAULT 0,
+        likes INTEGER NOT NULL DEFAULT 0,
+        comments INTEGER NOT NULL DEFAULT 0,
+        shares INTEGER NOT NULL DEFAULT 0,
+        saves INTEGER NOT NULL DEFAULT 0,
+        reach INTEGER NOT NULL DEFAULT 0,
+        impressions INTEGER NOT NULL DEFAULT 0,
+        engagement_rate REAL NOT NULL DEFAULT 0.0,
+        hashtags_used TEXT NOT NULL DEFAULT '[]',
+        posted_hour INTEGER,
+        posted_weekday INTEGER,
+        caption_length INTEGER,
+        caption_style TEXT,
+        content_topic TEXT,
+        measured_at TEXT NOT NULL DEFAULT (datetime('now')),
+        FOREIGN KEY (profile_id) REFERENCES ai_profiles(id) ON DELETE CASCADE
+    );
+
+    -- Learning data — patterns and adaptations the engine has learned
+    CREATE TABLE IF NOT EXISTS learning_data (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        profile_id INTEGER NOT NULL,
+        platform TEXT NOT NULL,
+        learning_type TEXT NOT NULL,
+        pattern_key TEXT NOT NULL,
+        pattern_value TEXT NOT NULL DEFAULT '{}',
+        confidence REAL NOT NULL DEFAULT 0.0,
+        data_points INTEGER NOT NULL DEFAULT 0,
+        last_updated TEXT NOT NULL DEFAULT (datetime('now')),
+        FOREIGN KEY (profile_id) REFERENCES ai_profiles(id) ON DELETE CASCADE
+    );
+
+    -- Chain health — monitors each component of the SSE pipeline
+    CREATE TABLE IF NOT EXISTS chain_health (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        profile_id INTEGER NOT NULL,
+        component TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'healthy',
+        last_check TEXT NOT NULL DEFAULT (datetime('now')),
+        last_success TEXT,
+        last_error TEXT,
+        error_count INTEGER NOT NULL DEFAULT 0,
+        consecutive_failures INTEGER NOT NULL DEFAULT 0,
+        metadata TEXT NOT NULL DEFAULT '{}',
+        FOREIGN KEY (profile_id) REFERENCES ai_profiles(id) ON DELETE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS region_analysis (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         region TEXT NOT NULL,
