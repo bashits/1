@@ -24,7 +24,7 @@ import {
   Plus, Sparkles, Trash2, Mic, Video, Image, Brain, Share2,
   DollarSign, Play, Eye, RefreshCw, Send, Zap,
   Volume2, FileText, ChevronRight, Hash, Clock, BarChart3,
-  Camera, Download, Star, Dice5, Loader2, User,
+  Camera, Download, Star, Dice5, Loader2, User, Lock, Unlock, Shield,
 } from "lucide-react";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
@@ -737,6 +737,7 @@ export default function AIProfilesPage() {
                   postHashtags={postHashtags} setPostHashtags={setPostHashtags}
                   postCaption={postCaption} setPostCaption={setPostCaption}
                   socialPosts={socialPosts} onSchedule={handleSchedulePost}
+                  selected={selected}
                 />
               )}
               {tab === "brain" && (
@@ -757,6 +758,118 @@ export default function AIProfilesPage() {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ========== IDENTITY LOCK PANEL ========== */
+
+function IdentityLockPanel({ selected }: { selected: AIProfile }) {
+  const [locking, setLocking] = useState(false);
+  const [unlocking, setUnlocking] = useState(false);
+  const [baseVideos, setBaseVideos] = useState<import("@/hooks/useApi").BaseVideo[]>([]);
+  const [lockResult, setLockResult] = useState<import("@/hooks/useApi").IdentityLockResult | null>(null);
+  const isLocked = selected.identity_locked;
+
+  useEffect(() => {
+    if (isLocked) {
+      api.getBaseVideos(selected.id).then((r) => setBaseVideos(r.videos || [])).catch(() => {});
+    }
+  }, [selected.id, isLocked]);
+
+  const handleLock = async () => {
+    setLocking(true);
+    setLockResult(null);
+    try {
+      const res = await api.lockIdentity(selected.id);
+      setLockResult(res);
+      if (res.success) {
+        setBaseVideos(res.videos || []);
+      }
+    } catch { /* ok */ }
+    setLocking(false);
+  };
+
+  const handleUnlock = async () => {
+    setUnlocking(true);
+    try {
+      await api.unlockIdentity(selected.id);
+      setBaseVideos([]);
+      setLockResult(null);
+    } catch { /* ok */ }
+    setUnlocking(false);
+  };
+
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 sm:p-6">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-base sm:text-lg font-semibold flex items-center gap-2">
+          <Shield className="h-5 w-5 text-cyan-400" /> Smart Identity Lock
+        </h3>
+        {isLocked ? (
+          <div className="flex items-center gap-2">
+            <span className="flex items-center gap-1.5 text-xs bg-green-500/20 text-green-400 px-2.5 py-1 rounded-full">
+              <Lock className="h-3 w-3" /> Заблокировано
+            </span>
+            <button
+              onClick={handleUnlock}
+              disabled={unlocking}
+              className="text-xs text-red-400 hover:text-red-300 px-2 py-1 rounded"
+            >
+              {unlocking ? "..." : "Разблокировать"}
+            </button>
+          </div>
+        ) : (
+          <span className="flex items-center gap-1.5 text-xs bg-zinc-700 text-zinc-400 px-2.5 py-1 rounded-full">
+            <Unlock className="h-3 w-3" /> Не заблокировано
+          </span>
+        )}
+      </div>
+
+      {!isLocked && !lockResult && (
+        <div className="space-y-3">
+          <p className="text-sm text-zinc-400">
+            Identity Lock находит одну и ту же девушку на Pexels (группировка по фотографу) и фиксирует её видео для генерации.
+            Результат: визуальная консистентность — одна и та же модель во всех видео.
+          </p>
+          <button
+            onClick={handleLock}
+            disabled={locking}
+            className="flex items-center gap-2 bg-cyan-600 hover:bg-cyan-700 disabled:opacity-50 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+          >
+            {locking ? (
+              <><Loader2 className="h-4 w-4 animate-spin" /> Поиск модели на Pexels...</>
+            ) : (
+              <><Lock className="h-4 w-4" /> Заблокировать внешность (бесплатно)</>
+            )}
+          </button>
+        </div>
+      )}
+
+      {lockResult && lockResult.success && (
+        <div className="bg-green-500/10 border border-green-500/20 rounded-lg p-3 mb-3">
+          <div className="text-sm text-green-400 font-medium">
+            Заблокировано {lockResult.videos_locked} видео от фотографа &ldquo;{lockResult.photographer}&rdquo;
+          </div>
+        </div>
+      )}
+
+      {baseVideos.length > 0 && (
+        <div className="space-y-2 mt-3">
+          <div className="text-xs text-zinc-400 mb-2">Закреплённые видео ({baseVideos.length}):</div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-48 overflow-y-auto">
+            {baseVideos.map((v) => (
+              <div key={v.id} className="bg-zinc-800 rounded-lg p-2 text-center">
+                <div className="text-xs text-zinc-300 truncate">{v.pexels_video_id}</div>
+                <div className="text-[10px] text-zinc-500 mt-0.5">
+                  {v.width}x{v.height} &middot; {v.duration}s
+                </div>
+                <div className="text-[10px] text-cyan-400 truncate">{v.photographer}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -909,6 +1022,9 @@ function OverviewTab({
           </div>
         ) : null}
       </div>
+
+      {/* Smart Identity Lock (Pexels Video Consistency) */}
+      <IdentityLockPanel selected={selected} />
 
       {pipeline?.voice_persona && (
         <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
@@ -1680,25 +1796,128 @@ function ContentTab({
   );
 }
 
-/* ========== SOCIAL TAB ========== */
+/* ========== SOCIAL TAB (Instagram Autopilot) ========== */
 
 function SocialTab({
   postPlatform, setPostPlatform, postHashtags, setPostHashtags,
-  postCaption, setPostCaption, socialPosts, onSchedule,
+  postCaption, setPostCaption, socialPosts, onSchedule, selected,
 }: {
   postPlatform: string; setPostPlatform: (v: string) => void;
   postHashtags: string; setPostHashtags: (v: string) => void;
   postCaption: string; setPostCaption: (v: string) => void;
   socialPosts: SocialPost[];
   onSchedule: () => void;
+  selected: AIProfile;
 }) {
+  const [autopilotConfig, setAutopilotConfig] = useState<import("@/hooks/useApi").AutopilotConfig | null>(null);
+  const [calendar, setCalendar] = useState<import("@/hooks/useApi").CalendarEntry[]>([]);
+  const [analytics, setAnalytics] = useState<import("@/hooks/useApi").AutopilotAnalytics | null>(null);
+  const [captionResult, setCaptionResult] = useState<import("@/hooks/useApi").CaptionResult | null>(null);
+  const [captionLoading, setCaptionLoading] = useState(false);
+  const [calendarLoading, setCalendarLoading] = useState(false);
+  const [autopilotSection, setAutopilotSection] = useState<"schedule" | "calendar" | "captions" | "analytics">("schedule");
+
+  useEffect(() => {
+    api.getAutopilot(selected.id).then(setAutopilotConfig).catch(() => {});
+    api.getCalendar(selected.id).then((r) => setCalendar(r.entries || [])).catch(() => {});
+    api.getAutopilotAnalytics(selected.id).then(setAnalytics).catch(() => {});
+  }, [selected.id]);
+
+  const handleToggleAutopilot = async () => {
+    if (!autopilotConfig) return;
+    const updated = await api.updateAutopilot(selected.id, { is_active: !autopilotConfig.is_active });
+    setAutopilotConfig(updated);
+  };
+
+  const handleGenerateCalendar = async () => {
+    setCalendarLoading(true);
+    try {
+      const res = await api.generateCalendar(selected.id, 7, 2);
+      setCalendar(res.entries || []);
+    } catch { /* ok */ }
+    setCalendarLoading(false);
+  };
+
+  const handleGenerateCaption = async (momentType: string) => {
+    setCaptionLoading(true);
+    try {
+      const res = await api.generateCaption(selected.id, momentType);
+      setCaptionResult(res);
+    } catch { /* ok */ }
+    setCaptionLoading(false);
+  };
+
+  const AP_SECTIONS = [
+    { id: "schedule" as const, label: "Пост", icon: Send },
+    { id: "calendar" as const, label: "Календарь", icon: Clock },
+    { id: "captions" as const, label: "Подписи", icon: FileText },
+    { id: "analytics" as const, label: "Аналитика", icon: BarChart3 },
+  ];
+
   return (
     <div className="space-y-4">
-      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
-        <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-          <Send className="h-5 w-5 text-blue-400" /> Запланировать пост
-        </h3>
-        <div className="space-y-3">
+      {/* Autopilot Status Bar */}
+      <div className="bg-gradient-to-r from-purple-900/30 to-pink-900/30 border border-purple-500/20 rounded-xl p-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className={`w-3 h-3 rounded-full ${autopilotConfig?.is_active ? "bg-green-500 animate-pulse" : "bg-zinc-600"}`} />
+            <div>
+              <div className="text-sm font-semibold">Instagram Автопилот</div>
+              <div className="text-xs text-zinc-400">
+                {autopilotConfig?.is_active ? "Активен" : "Выключен"}
+                {autopilotConfig?.instagram_username && ` \u2014 @${autopilotConfig.instagram_username}`}
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={handleToggleAutopilot}
+            className={`px-4 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+              autopilotConfig?.is_active
+                ? "bg-red-500/20 text-red-400 hover:bg-red-500/30"
+                : "bg-green-500/20 text-green-400 hover:bg-green-500/30"
+            }`}
+          >
+            {autopilotConfig?.is_active ? "Выключить" : "Включить"}
+          </button>
+        </div>
+        {analytics && (
+          <div className="grid grid-cols-4 gap-2 mt-3">
+            {[
+              { label: "Контент", value: analytics.content.total_content || 0 },
+              { label: "Запланировано", value: analytics.calendar.total_planned || 0 },
+              { label: "Опубликовано", value: analytics.calendar.total_posted || 0 },
+              { label: "Память", value: analytics.memory_entries || 0 },
+            ].map((s) => (
+              <div key={s.label} className="bg-zinc-800/50 rounded-lg p-2 text-center">
+                <div className="text-lg font-bold">{s.value}</div>
+                <div className="text-xs text-zinc-500">{s.label}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Section Tabs */}
+      <div className="flex gap-1 bg-zinc-900 rounded-lg p-1">
+        {AP_SECTIONS.map((s) => (
+          <button
+            key={s.id}
+            onClick={() => setAutopilotSection(s.id)}
+            className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-md text-xs font-medium transition-colors ${
+              autopilotSection === s.id ? "bg-zinc-700 text-white" : "text-zinc-500 hover:text-zinc-300"
+            }`}
+          >
+            <s.icon className="h-3.5 w-3.5" /> {s.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Schedule Post Section */}
+      {autopilotSection === "schedule" && (
+        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 sm:p-6 space-y-4">
+          <h3 className="text-base font-semibold flex items-center gap-2">
+            <Send className="h-5 w-5 text-blue-400" /> Запланировать пост
+          </h3>
           <div className="grid grid-cols-2 gap-3">
             <select
               value={postPlatform}
@@ -1720,7 +1939,7 @@ function SocialTab({
             value={postCaption}
             onChange={(e) => setPostCaption(e.target.value)}
             className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
-            rows={2}
+            rows={3}
             placeholder="Текст поста..."
           />
           <button
@@ -1730,36 +1949,181 @@ function SocialTab({
           >
             <Clock className="h-4 w-4" /> Запланировать
           </button>
-        </div>
-      </div>
 
-      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
-        <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-          <BarChart3 className="h-5 w-5 text-green-400" /> История постов
-        </h3>
-        {socialPosts.length === 0 ? (
-          <div className="text-center text-zinc-500 text-sm py-8">Постов пока нет</div>
-        ) : (
-          <div className="space-y-2">
-            {socialPosts.map((post) => (
-              <div key={post.id} className="bg-zinc-800 rounded-lg p-3 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <Hash className="h-4 w-4 text-zinc-500" />
-                  <div>
-                    <div className="text-sm">{post.caption?.slice(0, 60) || "\u2014"}</div>
-                    <div className="text-xs text-zinc-500">{post.platform} &middot; {post.status}</div>
+          {/* Post History */}
+          <div className="border-t border-zinc-800 pt-4 mt-4">
+            <h4 className="text-sm font-medium text-zinc-400 mb-3">История постов</h4>
+            {socialPosts.length === 0 ? (
+              <div className="text-center text-zinc-600 text-xs py-4">Постов пока нет</div>
+            ) : (
+              <div className="space-y-2 max-h-48 overflow-y-auto">
+                {socialPosts.map((post) => (
+                  <div key={post.id} className="bg-zinc-800 rounded-lg p-3 flex items-center justify-between">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <Hash className="h-4 w-4 text-zinc-500 shrink-0" />
+                      <div className="min-w-0">
+                        <div className="text-sm truncate">{post.caption?.slice(0, 50) || "\u2014"}</div>
+                        <div className="text-xs text-zinc-500">{post.platform} &middot; {post.status}</div>
+                      </div>
+                    </div>
                   </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Content Calendar */}
+      {autopilotSection === "calendar" && (
+        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 sm:p-6 space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-base font-semibold flex items-center gap-2">
+              <Clock className="h-5 w-5 text-amber-400" /> Контент-календарь
+            </h3>
+            <button
+              onClick={handleGenerateCalendar}
+              disabled={calendarLoading}
+              className="flex items-center gap-2 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+            >
+              {calendarLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+              Сгенерировать на 7 дней
+            </button>
+          </div>
+          {calendar.length === 0 ? (
+            <div className="text-center py-8">
+              <Clock className="h-8 w-8 mx-auto text-zinc-600 mb-2" />
+              <div className="text-sm text-zinc-500">Контент-календарь пуст</div>
+              <div className="text-xs text-zinc-600 mt-1">Нажмите кнопку выше для генерации плана на неделю</div>
+            </div>
+          ) : (
+            <div className="space-y-2 max-h-96 overflow-y-auto">
+              {calendar.map((entry, i) => (
+                <div key={i} className="bg-zinc-800 rounded-lg p-3">
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-2">
+                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                        entry.content_type === "reel" ? "bg-pink-500/20 text-pink-400" :
+                        entry.content_type === "story" ? "bg-blue-500/20 text-blue-400" :
+                        "bg-violet-500/20 text-violet-400"
+                      }`}>
+                        {entry.content_type}
+                      </span>
+                      <span className={`px-2 py-0.5 rounded text-xs ${
+                        entry.status === "planned" ? "bg-amber-500/10 text-amber-400" :
+                        entry.status === "posted" ? "bg-green-500/10 text-green-400" :
+                        "bg-zinc-700 text-zinc-400"
+                      }`}>
+                        {entry.status === "planned" ? "запланирован" : entry.status}
+                      </span>
+                    </div>
+                    <span className="text-xs text-zinc-500">
+                      {new Date(entry.planned_date).toLocaleDateString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                    </span>
+                  </div>
+                  <div className="text-sm text-zinc-300">{entry.topic}</div>
+                  <div className="text-xs text-zinc-500 mt-1 line-clamp-2">{entry.caption_draft}</div>
+                  {entry.hashtags?.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      {entry.hashtags.slice(0, 5).map((h, j) => (
+                        <span key={j} className="text-xs bg-zinc-700 text-zinc-400 px-1.5 py-0.5 rounded">{h}</span>
+                      ))}
+                      {entry.hashtags.length > 5 && (
+                        <span className="text-xs text-zinc-600">+{entry.hashtags.length - 5}</span>
+                      )}
+                    </div>
+                  )}
                 </div>
-                <div className="flex gap-1">
-                  {post.hashtags?.slice(0, 3).map((h) => (
-                    <span key={h} className="text-[10px] bg-zinc-700 px-1.5 py-0.5 rounded">{h}</span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Smart Captions Generator */}
+      {autopilotSection === "captions" && (
+        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 sm:p-6 space-y-4">
+          <h3 className="text-base font-semibold flex items-center gap-2">
+            <FileText className="h-5 w-5 text-violet-400" /> Генератор подписей
+          </h3>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            {["clutch", "ace", "highlight", "generic", "meme"].map((type) => (
+              <button
+                key={type}
+                onClick={() => handleGenerateCaption(type)}
+                disabled={captionLoading}
+                className="bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 px-3 py-2 rounded-lg text-xs font-medium transition-colors capitalize"
+              >
+                {type}
+              </button>
+            ))}
+          </div>
+          {captionResult && (
+            <div className="bg-zinc-800 rounded-lg p-4 space-y-3">
+              <div className="text-sm whitespace-pre-line">{captionResult.caption}</div>
+              <div className="border-t border-zinc-700 pt-2">
+                <div className="text-xs text-zinc-400 mb-1">Хештеги ({captionResult.hashtags.length}):</div>
+                <div className="flex flex-wrap gap-1">
+                  {captionResult.hashtags.map((h, i) => (
+                    <span key={i} className="text-xs bg-violet-500/20 text-violet-300 px-1.5 py-0.5 rounded">{h}</span>
                   ))}
                 </div>
               </div>
-            ))}
-          </div>
-        )}
-      </div>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(`${captionResult.caption}\n\n${captionResult.hashtags_text}`);
+                }}
+                className="text-xs text-violet-400 hover:text-violet-300"
+              >
+                Копировать всё
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Analytics */}
+      {autopilotSection === "analytics" && (
+        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 sm:p-6 space-y-4">
+          <h3 className="text-base font-semibold flex items-center gap-2">
+            <BarChart3 className="h-5 w-5 text-green-400" /> Аналитика автопилота
+          </h3>
+          {analytics ? (
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-zinc-800 rounded-lg p-4">
+                <div className="text-xs text-zinc-400 mb-1">Контент</div>
+                <div className="text-2xl font-bold">{analytics.content.total_content || 0}</div>
+                <div className="flex gap-3 mt-1 text-xs text-zinc-500">
+                  <span>Видео: {analytics.content.total_videos || 0}</span>
+                  <span>Фото: {analytics.content.total_photos || 0}</span>
+                </div>
+              </div>
+              <div className="bg-zinc-800 rounded-lg p-4">
+                <div className="text-xs text-zinc-400 mb-1">Затраты</div>
+                <div className="text-2xl font-bold text-green-400">${(analytics.content.total_cost || 0).toFixed(2)}</div>
+                <div className="text-xs text-zinc-500 mt-1">за весь контент</div>
+              </div>
+              <div className="bg-zinc-800 rounded-lg p-4">
+                <div className="text-xs text-zinc-400 mb-1">Публикации</div>
+                <div className="text-2xl font-bold">{analytics.social.total_posts || 0}</div>
+                <div className="flex gap-3 mt-1 text-xs text-zinc-500">
+                  <span>IG: {analytics.social.instagram_posts || 0}</span>
+                  <span>TT: {analytics.social.tiktok_posts || 0}</span>
+                </div>
+              </div>
+              <div className="bg-zinc-800 rounded-lg p-4">
+                <div className="text-xs text-zinc-400 mb-1">Календарь</div>
+                <div className="text-2xl font-bold">{analytics.calendar.total_planned || 0}</div>
+                <div className="text-xs text-zinc-500 mt-1">
+                  Опубликовано: {analytics.calendar.total_posted || 0}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="text-center text-zinc-500 text-sm py-8">Загрузка аналитики...</div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

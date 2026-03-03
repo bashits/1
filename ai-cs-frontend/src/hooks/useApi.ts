@@ -141,6 +141,37 @@ export const api = {
   completeLoraTraining: (id: number) =>
     apiFetch<TrainLoraResult>(`/api/ai-profiles/${id}/complete-lora-training`, { method: "POST" }),
 
+  // Smart Identity Lock
+  lockIdentity: (id: number) =>
+    apiFetch<IdentityLockResult>(`/api/ai-profiles/${id}/lock-identity`, { method: "POST" }),
+  getBaseVideos: (id: number) =>
+    apiFetch<BaseVideosResponse>(`/api/ai-profiles/${id}/base-videos`),
+  unlockIdentity: (id: number) =>
+    apiFetch<{ success: boolean; videos_removed: number }>(`/api/ai-profiles/${id}/unlock-identity`, { method: "DELETE" }),
+  generateBackstory: (id: number) =>
+    apiFetch<{ profile_id: number; backstory: string }>(`/api/ai-profiles/${id}/generate-backstory`, { method: "POST" }),
+
+  // Instagram Autopilot
+  getAutopilot: (id: number) => apiFetch<AutopilotConfig>(`/api/ai-profiles/${id}/autopilot`),
+  updateAutopilot: (id: number, data: Partial<AutopilotConfig>) =>
+    apiFetch<AutopilotConfig>(`/api/ai-profiles/${id}/autopilot`, { method: "PUT", body: JSON.stringify(data) }),
+  generateCalendar: (id: number, days?: number, postsPerDay?: number) =>
+    apiFetch<CalendarResponse>(`/api/ai-profiles/${id}/autopilot/calendar`, { method: "POST", body: JSON.stringify({ days: days || 7, posts_per_day: postsPerDay || 2 }) }),
+  getCalendar: (id: number) =>
+    apiFetch<CalendarResponse>(`/api/ai-profiles/${id}/autopilot/calendar`),
+  getAutopilotAnalytics: (id: number) =>
+    apiFetch<AutopilotAnalytics>(`/api/ai-profiles/${id}/autopilot/analytics`),
+  generateCaption: (id: number, momentType?: string) =>
+    apiFetch<CaptionResult>(`/api/ai-profiles/${id}/autopilot/caption`, { method: "POST", body: JSON.stringify({ moment_type: momentType || "generic" }) }),
+
+  // Character Memory
+  getCharacterMemories: (id: number) =>
+    apiFetch<CharacterMemoryResponse>(`/api/ai-profiles/${id}/character-memory`),
+  addCharacterMemory: (id: number, data: { memory_type: string; content: string; importance?: number }) =>
+    apiFetch<{ success: boolean; memory_id: number }>(`/api/ai-profiles/${id}/character-memory`, { method: "POST", body: JSON.stringify(data) }),
+  getCharacterContext: (id: number) =>
+    apiFetch<CharacterContext>(`/api/ai-profiles/${id}/character-context`),
+
   // Tool Registry
   getTools: (category?: string) =>
     apiFetch<Tool[]>(`/api/tools/${category ? `?category=${category}` : ""}`),
@@ -420,6 +451,13 @@ export interface AIProfile {
   lora_trigger_word?: string | null;
   lora_training_status?: string;
   lora_trained_at?: string | null;
+  identity_locked?: boolean;
+  pexels_user_id?: string | null;
+  base_videos_count?: number;
+  instagram_autopilot_active?: boolean;
+  backstory?: string | null;
+  catchphrases?: string | null;
+  content_themes?: string | null;
 }
 
 export interface ProfilePresets {
@@ -1197,6 +1235,115 @@ export interface MontageClipFile {
   file_size: number;
   thumbnail: string | null;
   created_at: string;
+}
+
+// Smart Identity & Autopilot Types
+export interface IdentityLockResult {
+  success: boolean;
+  videos_locked: number;
+  pexels_user?: string;
+  pexels_user_id?: number;
+  message: string;
+  already_locked?: boolean;
+}
+
+export interface BaseVideo {
+  id: number;
+  profile_id: number;
+  pexels_id: number;
+  video_url: string;
+  local_path: string | null;
+  preview_url: string;
+  duration: number;
+  width: number;
+  height: number;
+  pexels_user: string;
+  pexels_user_id: number;
+  is_primary: number;
+  use_count: number;
+  quality_score: number;
+  created_at: string;
+}
+
+export interface BaseVideosResponse {
+  profile_id: number;
+  videos: BaseVideo[];
+  count: number;
+  identity_locked: boolean;
+}
+
+export interface AutopilotConfig {
+  id: number;
+  profile_id: number;
+  instagram_username: string | null;
+  is_active: boolean;
+  posting_schedule: { times: string[]; timezone: string; days: string[] };
+  content_queue: unknown[];
+  caption_style: { language: string; emoji_level: string; hashtag_count: number; cta_enabled: boolean };
+  hashtag_groups: Record<string, string[]>;
+  engagement_rules: { auto_like: boolean; auto_comment: boolean; auto_follow: boolean };
+  stats: { total_posts: number; total_likes: number; total_comments: number; total_followers: number; total_reach: number };
+  last_post_at: string | null;
+  next_post_at: string | null;
+}
+
+export interface CalendarEntry {
+  profile_id: number;
+  planned_date: string;
+  content_type: string;
+  topic: string;
+  caption_draft: string;
+  hashtags: string[];
+  status: string;
+}
+
+export interface CalendarResponse {
+  profile_id: number;
+  entries: CalendarEntry[];
+  total: number;
+}
+
+export interface AutopilotAnalytics {
+  content: { total_content: number; total_videos: number; total_photos: number; total_voice: number; total_cost: number };
+  calendar: { total_planned: number; total_posted: number; total_upcoming: number };
+  social: { total_posts: number; instagram_posts: number; tiktok_posts: number };
+  memory_entries: number;
+}
+
+export interface CaptionResult {
+  caption: string;
+  hashtags: string[];
+  hashtags_text: string;
+  cta: string;
+  moment_type: string;
+}
+
+export interface CharacterMemoryEntry {
+  id: number;
+  profile_id: number;
+  memory_type: string;
+  content: string;
+  importance: number;
+  context: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface CharacterMemoryResponse {
+  profile_id: number;
+  memories: CharacterMemoryEntry[];
+  count: number;
+}
+
+export interface CharacterContext {
+  name: string;
+  personality: Record<string, unknown>;
+  appearance: Record<string, unknown>;
+  voice_config: Record<string, unknown>;
+  backstory: string;
+  catchphrases: string[];
+  memories: CharacterMemoryEntry[];
+  content_performance: { content_type: string; count: number; avg_cost: number }[];
+  memory_profile: Record<string, unknown>;
 }
 
 export interface StreamerStatsResponse {

@@ -375,6 +375,77 @@ async def init_db():
         FOREIGN KEY (profile_id) REFERENCES ai_profiles(id) ON DELETE CASCADE
     );
 
+    -- Profile base videos: locked Pexels videos per girl for visual consistency
+    CREATE TABLE IF NOT EXISTS profile_base_videos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        profile_id INTEGER NOT NULL,
+        pexels_id INTEGER,
+        video_url TEXT NOT NULL,
+        local_path TEXT,
+        preview_url TEXT,
+        duration REAL NOT NULL DEFAULT 0,
+        width INTEGER NOT NULL DEFAULT 0,
+        height INTEGER NOT NULL DEFAULT 0,
+        pexels_user TEXT,
+        pexels_user_id INTEGER,
+        is_primary INTEGER NOT NULL DEFAULT 0,
+        use_count INTEGER NOT NULL DEFAULT 0,
+        quality_score REAL NOT NULL DEFAULT 0.5,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        FOREIGN KEY (profile_id) REFERENCES ai_profiles(id) ON DELETE CASCADE
+    );
+
+    -- Instagram autopilot: scheduling, captions, hashtags, engagement tracking
+    CREATE TABLE IF NOT EXISTS instagram_autopilot (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        profile_id INTEGER NOT NULL UNIQUE,
+        instagram_username TEXT,
+        instagram_password_encrypted TEXT,
+        is_active INTEGER NOT NULL DEFAULT 0,
+        posting_schedule TEXT NOT NULL DEFAULT '{"times": ["10:00", "14:00", "19:00"], "timezone": "UTC", "days": ["mon","tue","wed","thu","fri","sat","sun"]}',
+        content_queue TEXT NOT NULL DEFAULT '[]',
+        caption_style TEXT NOT NULL DEFAULT '{"language": "en", "emoji_level": "moderate", "hashtag_count": 15, "cta_enabled": true}',
+        hashtag_groups TEXT NOT NULL DEFAULT '{}',
+        engagement_rules TEXT NOT NULL DEFAULT '{"auto_like": false, "auto_comment": false, "auto_follow": false}',
+        stats TEXT NOT NULL DEFAULT '{"total_posts": 0, "total_likes": 0, "total_comments": 0, "total_followers": 0, "total_reach": 0}',
+        last_post_at TEXT,
+        next_post_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        FOREIGN KEY (profile_id) REFERENCES ai_profiles(id) ON DELETE CASCADE
+    );
+
+    -- Character memory: persistent memory/context for AI girl conversations
+    CREATE TABLE IF NOT EXISTS character_memory (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        profile_id INTEGER NOT NULL,
+        memory_type TEXT NOT NULL DEFAULT 'general',
+        content TEXT NOT NULL,
+        importance REAL NOT NULL DEFAULT 0.5,
+        context TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        expires_at TEXT,
+        FOREIGN KEY (profile_id) REFERENCES ai_profiles(id) ON DELETE CASCADE
+    );
+
+    -- Content calendar: planned content schedule per profile
+    CREATE TABLE IF NOT EXISTS content_calendar (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        profile_id INTEGER NOT NULL,
+        planned_date TEXT NOT NULL,
+        content_type TEXT NOT NULL DEFAULT 'reel',
+        topic TEXT,
+        caption_draft TEXT,
+        hashtags TEXT NOT NULL DEFAULT '[]',
+        status TEXT NOT NULL DEFAULT 'planned',
+        content_item_id INTEGER,
+        posted_at TEXT,
+        performance TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        FOREIGN KEY (profile_id) REFERENCES ai_profiles(id) ON DELETE CASCADE,
+        FOREIGN KEY (content_item_id) REFERENCES content_items(id) ON DELETE SET NULL
+    );
+
     CREATE TABLE IF NOT EXISTS region_analysis (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         region TEXT NOT NULL,
@@ -531,6 +602,36 @@ async def init_db():
         pass
     try:
         await db.execute("ALTER TABLE ai_profiles ADD COLUMN lora_trained_at TEXT")
+    except Exception:
+        pass
+
+    # Smart identity fields on ai_profiles
+    try:
+        await db.execute("ALTER TABLE ai_profiles ADD COLUMN identity_locked INTEGER NOT NULL DEFAULT 0")
+    except Exception:
+        pass
+    try:
+        await db.execute("ALTER TABLE ai_profiles ADD COLUMN pexels_user_id INTEGER")
+    except Exception:
+        pass
+    try:
+        await db.execute("ALTER TABLE ai_profiles ADD COLUMN base_videos_count INTEGER NOT NULL DEFAULT 0")
+    except Exception:
+        pass
+    try:
+        await db.execute("ALTER TABLE ai_profiles ADD COLUMN instagram_autopilot_active INTEGER NOT NULL DEFAULT 0")
+    except Exception:
+        pass
+    try:
+        await db.execute("ALTER TABLE ai_profiles ADD COLUMN backstory TEXT")
+    except Exception:
+        pass
+    try:
+        await db.execute("ALTER TABLE ai_profiles ADD COLUMN catchphrases TEXT NOT NULL DEFAULT '[]'")
+    except Exception:
+        pass
+    try:
+        await db.execute("ALTER TABLE ai_profiles ADD COLUMN content_themes TEXT NOT NULL DEFAULT '[]'")
     except Exception:
         pass
 

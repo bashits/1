@@ -2026,3 +2026,214 @@ async def complete_lora_training(
         await db.commit()
 
         return {"success": False, "status": status, "error": error}
+
+
+# ─── Smart Identity Lock ─────────────────────────────────────────────
+
+@router.post("/{profile_id}/lock-identity")
+async def lock_identity(
+    profile_id: int,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Lock visual identity — find and save consistent base videos from Pexels.
+
+    Searches for videos matching the girl's appearance, groups by photographer
+    (same photographer = same model = visual consistency), and locks the best
+    set to this profile. All future video generation uses these locked videos.
+    """
+    from app.services.smart_identity import lock_identity_videos
+
+    cursor = await db.execute("SELECT * FROM ai_profiles WHERE id = ?", (profile_id,))
+    row = await cursor.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    profile = _parse_profile(row)
+    appearance = profile.get("appearance", {})
+
+    result = await lock_identity_videos(db, profile_id, appearance, target_count=8)
+
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("message", "Failed to lock identity"))
+
+    return result
+
+
+@router.get("/{profile_id}/base-videos")
+async def get_base_videos(
+    profile_id: int,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Get all locked base videos for a profile."""
+    from app.services.smart_identity import get_profile_base_videos
+
+    videos = await get_profile_base_videos(db, profile_id)
+    return {
+        "profile_id": profile_id,
+        "videos": videos,
+        "count": len(videos),
+        "identity_locked": len(videos) > 0,
+    }
+
+
+@router.delete("/{profile_id}/unlock-identity")
+async def unlock_identity_endpoint(
+    profile_id: int,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Unlock visual identity — remove locked videos so new ones can be selected."""
+    from app.services.smart_identity import unlock_identity
+    return await unlock_identity(db, profile_id)
+
+
+@router.post("/{profile_id}/generate-backstory")
+async def generate_backstory_endpoint(
+    profile_id: int,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Generate a unique backstory for the AI character."""
+    from app.services.smart_identity import generate_backstory
+    backstory = await generate_backstory(db, profile_id)
+    return {"profile_id": profile_id, "backstory": backstory}
+
+
+# ─── Instagram Autopilot ─────────────────────────────────────────────
+
+@router.get("/{profile_id}/autopilot")
+async def get_autopilot(
+    profile_id: int,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Get Instagram autopilot configuration for a profile."""
+    from app.services.instagram_autopilot import get_autopilot_config
+    return await get_autopilot_config(db, profile_id)
+
+
+@router.put("/{profile_id}/autopilot")
+async def update_autopilot(
+    profile_id: int,
+    data: dict,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Update Instagram autopilot configuration."""
+    from app.services.instagram_autopilot import update_autopilot_config
+    return await update_autopilot_config(db, profile_id, data)
+
+
+@router.post("/{profile_id}/autopilot/calendar")
+async def generate_calendar(
+    profile_id: int,
+    data: dict | None = None,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Generate a content calendar for the next N days."""
+    from app.services.instagram_autopilot import generate_content_calendar
+
+    days = (data or {}).get("days", 7)
+    posts_per_day = (data or {}).get("posts_per_day", 2)
+
+    entries = await generate_content_calendar(db, profile_id, days=days, posts_per_day=posts_per_day)
+    return {
+        "profile_id": profile_id,
+        "entries": entries,
+        "total": len(entries),
+        "days": days,
+    }
+
+
+@router.get("/{profile_id}/autopilot/calendar")
+async def get_calendar(
+    profile_id: int,
+    status: Optional[str] = None,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Get content calendar entries."""
+    from app.services.instagram_autopilot import get_content_calendar
+
+    entries = await get_content_calendar(db, profile_id, status=status)
+    return {
+        "profile_id": profile_id,
+        "entries": entries,
+        "total": len(entries),
+    }
+
+
+@router.get("/{profile_id}/autopilot/analytics")
+async def get_analytics(
+    profile_id: int,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Get autopilot analytics summary."""
+    from app.services.instagram_autopilot import get_autopilot_analytics
+    return await get_autopilot_analytics(db, profile_id)
+
+
+@router.post("/{profile_id}/autopilot/caption")
+async def generate_caption_endpoint(
+    profile_id: int,
+    data: dict | None = None,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Generate a personality-matched Instagram caption."""
+    from app.services.instagram_autopilot import generate_caption
+
+    cursor = await db.execute("SELECT personality, content_style FROM ai_profiles WHERE id = ?", (profile_id,))
+    row = await cursor.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    personality = json.loads(row["personality"]) if row["personality"] else {}
+    content_style = json.loads(row["content_style"]) if row["content_style"] else {}
+
+    moment_type = (data or {}).get("moment_type", "generic")
+    emoji_level = content_style.get("emoji_usage", "moderate")
+
+    return generate_caption(
+        moment_type=moment_type,
+        personality=personality,
+        emoji_level=emoji_level,
+    )
+
+
+# ─── Character Memory ────────────────────────────────────────────────
+
+@router.get("/{profile_id}/character-memory")
+async def get_character_memories(
+    profile_id: int,
+    memory_type: Optional[str] = None,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Get character memory entries."""
+    from app.services.instagram_autopilot import get_memories
+    memories = await get_memories(db, profile_id, memory_type=memory_type)
+    return {"profile_id": profile_id, "memories": memories, "count": len(memories)}
+
+
+@router.post("/{profile_id}/character-memory")
+async def add_character_memory(
+    profile_id: int,
+    data: dict,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Add a memory entry for the AI character."""
+    from app.services.instagram_autopilot import add_memory
+
+    memory_id = await add_memory(
+        db,
+        profile_id,
+        memory_type=data.get("memory_type", "general"),
+        content=data.get("content", ""),
+        importance=data.get("importance", 0.5),
+        context=data.get("context"),
+    )
+    return {"success": True, "memory_id": memory_id}
+
+
+@router.get("/{profile_id}/character-context")
+async def get_character_context(
+    profile_id: int,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    """Get full character context (profile + memories + performance)."""
+    from app.services.instagram_autopilot import build_character_context
+    return await build_character_context(db, profile_id)
