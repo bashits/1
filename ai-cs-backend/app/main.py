@@ -11,7 +11,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 import os
 
 from app.database import init_db
@@ -419,7 +419,7 @@ async def serve_spa(request: Request, full_path: str):
     """Serve the frontend SPA for any non-API route."""
     # Don't intercept API, static, docs, healthz routes
     if full_path.startswith(("api/", "static/", "assets/", "docs", "openapi", "healthz", "redoc")):
-        return {"detail": "Not Found"}
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
     if os.path.isfile(_frontend_index):
         return FileResponse(_frontend_index)
-    return {"detail": "Frontend not available"}
+    return JSONResponse({"detail": "Frontend not available"}, status_code=404)
