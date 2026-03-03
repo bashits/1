@@ -219,12 +219,15 @@ async def reseed_data():
     try:
         await db.execute("PRAGMA journal_mode=WAL")
 
-        # Clear all existing data
+        # Clear all existing data (use actual table names from database.py)
         for table in ["clips", "ab_tests", "moments", "streams", "trends", "region_analysis",
-                       "ai_profiles", "ai_profile_content", "social_engine_config",
-                       "social_engine_trends", "social_engine_plans", "social_engine_posts",
-                       "social_engine_engagement", "social_engine_performance",
-                       "social_engine_learning", "character_memories"]:
+                       "ai_profiles", "content_items", "social_posts", "voice_samples",
+                       "profile_gallery", "prompt_learning", "voice_identity",
+                       "lora_models", "profile_base_videos", "instagram_autopilot",
+                       "content_calendar", "character_memory",
+                       "social_engine_config", "platform_trends", "posting_queue",
+                       "engagement_actions", "performance_log",
+                       "learning_data", "chain_health"]:
             try:
                 await db.execute(f"DELETE FROM {table}")
             except Exception:
