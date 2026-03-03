@@ -242,8 +242,11 @@ def calculate_video_cost(
     Returns detailed breakdown so user sees exact cost before spending money.
     All prices verified against official fal.ai model pages (March 2026).
     """
-    # Photo cost (LoRA inference or standard)
-    if photo_model_key == "lora":
+    # Photo cost (optional)
+    if photo_model_key in ("none", "no_photo", "", None):
+        photo_cost = 0.0
+        photo_model_key = "none"
+    elif photo_model_key == "lora":
         photo_cost = 0.025  # LoRA inference via fal-ai/flux-lora (~$0.025/MP)
     else:
         model = IMAGE_MODELS.get(photo_model_key, IMAGE_MODELS["flux2_realism"])

@@ -299,10 +299,12 @@ async def get_pricing():
 @router.get("/video-cost-estimate")
 async def get_video_cost_estimate(
     duration_seconds: float = Query(default=3.0, ge=1.0, le=60.0),
-    lipsync_model_key: str = "omnihuman",
+    # Production defaults (our current pipeline): edge-tts + Pexels base video + RunPod LatentSync lip-sync
+    lipsync_model_key: str = "runpod_latentsync",
+    voice_engine: str = "edge_tts",
+    include_photo: bool = False,
     include_i2v: bool = False,
     i2v_model_key: str = "kling",
-    voice_engine: str = "elevenlabs",
 ):
     # Validate against our discrete UI options
     allowed = {float(d) for d in VIDEO_DURATION_OPTIONS}
@@ -314,7 +316,7 @@ async def get_video_cost_estimate(
     return calculate_video_cost(
         duration_seconds=duration_seconds,
         lipsync_model_key=lipsync_model_key,
-        photo_model_key="lora",
+        photo_model_key="lora" if include_photo else "none",
         include_i2v=include_i2v,
         i2v_model_key=i2v_model_key,
         voice_engine=voice_engine,

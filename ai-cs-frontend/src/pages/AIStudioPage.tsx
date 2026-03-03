@@ -137,7 +137,7 @@ export default function AIStudioPage() {
       await api.setFalKey(falKey.trim());
       setKeySet(true);
       await loadStatus();
-    } catch (e) {
+    } catch {
       setError("Не удалось сохранить API ключ");
     }
   };

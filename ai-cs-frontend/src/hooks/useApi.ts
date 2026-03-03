@@ -783,6 +783,7 @@ export interface PricingInfo {
 export interface VideoCostEstimateParams {
   duration_seconds: number;
   lipsync_model_key: string;
+  include_photo?: boolean;
   include_i2v?: boolean;
   i2v_model_key?: string;
   voice_engine?: string;
