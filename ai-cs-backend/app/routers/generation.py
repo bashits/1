@@ -92,17 +92,12 @@ class VideoFromImageRequest(BaseModel):
 
 
 class FullPipelineRequest(BaseModel):
+    """RunPod LatentSync 1.6 pipeline request."""
     text: str
-    photo_prompt: Optional[str] = None
-    content_type: str = "gaming_reaction"
     appearance: Optional[dict] = None
-    voice_id: str = "en_female_cheerful"
-    face_image_url: Optional[str] = None
-    reference_images: Optional[list[str]] = None
-    quality: str = "maximum"
-    lipsync_model_key: str = "omnihuman"
-    photo_model_key: str = "flux2_realism"
-    generate_i2v: bool = False
+    voice_id: str = "jessica_fire"
+    base_video_url: Optional[str] = None
+    moment_type: str = "generic"
 
 
 class SetAPIKeyRequest(BaseModel):
@@ -321,22 +316,16 @@ async def recommend_model(
     return {"recommendation": model}
 
 
-# ─── Full Smart Pipeline ───────────────────────────────────────────
+# ─── Full Smart Pipeline (RunPod LatentSync 1.6) ──────────────────
 @router.post("/full-pipeline")
 async def create_full_pipeline(req: FullPipelineRequest):
-    """Run the complete smart pipeline: Prompt → TTS → Photo → Lipsync → (optional) I2V."""
+    """Run the RunPod LatentSync 1.6 pipeline: edge-tts → Pexels video → LatentSync lip-sync."""
     return await run_full_pipeline(
         text=req.text,
-        photo_prompt=req.photo_prompt,
-        content_type=req.content_type,
         appearance=req.appearance,
         voice_id=req.voice_id,
-        face_image_url=req.face_image_url,
-        reference_images=req.reference_images,
-        quality=req.quality,
-        lipsync_model_key=req.lipsync_model_key,
-        photo_model_key=req.photo_model_key,
-        generate_i2v=req.generate_i2v,
+        base_video_url=req.base_video_url,
+        moment_type=req.moment_type,
     )
 
 
