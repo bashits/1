@@ -974,7 +974,7 @@ function OverviewTab({
           <div className="space-y-3">
             <p className="text-sm text-zinc-400">
               LoRA находит 10-20 реальных фото модели из открытого доступа (Pexels) и обучает модель.
-              Результат: живая девушка с фиксированным лицом. ~$2 за обучение, ~$0.05 за фото.
+              Результат: живая девушка с фиксированным лицом. $2.00 за обучение, $0.025 за фото.
             </p>
             <p className="text-xs text-amber-400">
               Важно: генерация фото доступна только после обучения LoRA.
@@ -987,7 +987,8 @@ function OverviewTab({
               {loraTraining ? (
                 <><Loader2 className="h-4 w-4 animate-spin" /> Поиск фото модели...</>
               ) : (
-                <><Sparkles className="h-4 w-4" /> Обучить LoRA на реальных фото (~$2, 5-15 мин)</>
+                <><Sparkles className="h-4 w-4" /> Обучить LoRA ($2.00, 5-15 мин)</>
+
               )}
             </button>
             {lStatus === "failed" && loraResult?.error && (
@@ -1022,7 +1023,7 @@ function OverviewTab({
               </div>
               <div className="bg-zinc-800 rounded-lg p-3">
                 <div className="text-zinc-400">Стоимость за фото</div>
-                <div className="text-lg font-bold text-green-400">$0.05</div>
+                <div className="text-lg font-bold text-green-400">$0.025</div>
               </div>
             </div>
           </div>
@@ -1063,7 +1064,7 @@ function OverviewTab({
       {pipeline && (
         <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
           <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
-            <Sparkles className="h-5 w-5 text-violet-400" /> Пайплайн
+            <Sparkles className="h-5 w-5 text-violet-400" /> Пайплайн генерации
           </h3>
           <div className="space-y-2">
             {Object.entries(pipeline.pipeline).map(([key, step]) => (
@@ -1081,6 +1082,45 @@ function OverviewTab({
           </div>
         </div>
       )}
+
+      {/* Pricing Reference Card */}
+      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 sm:p-6">
+        <h3 className="text-base sm:text-lg font-semibold mb-3 flex items-center gap-2">
+          <DollarSign className="h-5 w-5 text-green-400" /> Актуальные цены
+        </h3>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
+          <div className="bg-zinc-800 rounded-lg p-3">
+            <div className="text-zinc-500 mb-1">Фото (LoRA)</div>
+            <div className="text-sm font-bold text-green-400">$0.025</div>
+            <div className="text-[10px] text-zinc-600">FLUX Realism $0.021</div>
+          </div>
+          <div className="bg-zinc-800 rounded-lg p-3">
+            <div className="text-zinc-500 mb-1">Видео lip-sync</div>
+            <div className="text-sm font-bold text-green-400">$0.003/сек</div>
+            <div className="text-[10px] text-zinc-600">RunPod LatentSync 1.6</div>
+          </div>
+          <div className="bg-zinc-800 rounded-lg p-3">
+            <div className="text-zinc-500 mb-1">Голос TTS</div>
+            <div className="text-sm font-bold text-green-400">FREE</div>
+            <div className="text-[10px] text-zinc-600">edge-tts 50+ языков</div>
+          </div>
+          <div className="bg-zinc-800 rounded-lg p-3">
+            <div className="text-zinc-500 mb-1">LoRA обучение</div>
+            <div className="text-sm font-bold text-amber-400">$2.00</div>
+            <div className="text-[10px] text-zinc-600">одноразово на модель</div>
+          </div>
+          <div className="bg-zinc-800 rounded-lg p-3">
+            <div className="text-zinc-500 mb-1">Клип 3 сек</div>
+            <div className="text-sm font-bold text-green-400">~$0.009</div>
+            <div className="text-[10px] text-zinc-600">TTS + видео + lip-sync</div>
+          </div>
+          <div className="bg-zinc-800 rounded-lg p-3">
+            <div className="text-zinc-500 mb-1">Базовые видео</div>
+            <div className="text-sm font-bold text-green-400">FREE</div>
+            <div className="text-[10px] text-zinc-600">Pexels 200 req/hr</div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1107,8 +1147,10 @@ const PHOTO_CONTENT_TYPES = [
 ];
 
 const PHOTO_MODELS = [
-  { id: "flux2_realism", label: "FLUX 2 Realism (быстро, $0.025)", cost: 0.025 },
-  { id: "flux2_pro", label: "FLUX 2 Pro (качество, $0.05)", cost: 0.05 },
+  { id: "flux2_realism", label: "FLUX 2 Realism ($0.021)", cost: 0.021 },
+  { id: "flux2_pro", label: "FLUX 1.1 Pro ($0.04)", cost: 0.04 },
+  { id: "flux_dev", label: "FLUX Dev ($0.025)", cost: 0.025 },
+  { id: "flux_schnell", label: "FLUX Schnell ($0.003)", cost: 0.003 },
 ];
 
 
@@ -1145,7 +1187,7 @@ function GenerateTab({
       {/* ===== PHOTO GENERATION ===== */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
         <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-          <Camera className="h-5 w-5 text-emerald-400" /> Генерация фото (fal.ai FLUX)
+          <Camera className="h-5 w-5 text-emerald-400" /> Генерация фото (LoRA)
         </h3>
         <div className="space-y-3">
           {/* Content type selector */}
@@ -1260,7 +1302,7 @@ function GenerateTab({
           )}
           <p className="text-xs text-zinc-500">
             {selected?.lora_training_status === "trained" ? (
-              <span className="text-green-400">LoRA обучена на реальных фото — лицо зафиксировано (~$0.05/фото)</span>
+              <span className="text-green-400">LoRA обучена на реальных фото — лицо зафиксировано ($0.025/фото)</span>
             ) : (
               <span className="text-amber-400">LoRA не обучена — генерация недоступна</span>
             )}
@@ -1436,8 +1478,8 @@ function GenerateTab({
           <div className="bg-gradient-to-r from-emerald-500/10 to-cyan-500/10 border border-emerald-500/20 rounded-lg p-3">
             <p className="text-xs text-emerald-400 font-semibold mb-1">RunPod Serverless — LatentSync 1.6</p>
             <p className="text-[10px] text-zinc-400">
-              edge-tts голос (FREE) + Pexels базовое видео (FREE) + LatentSync 1.6 lip-sync (~$0.009/3с GPU).
-              Длительность видео = длительность озвучки текста.
+              edge-tts голос (FREE) + Pexels базовое видео (FREE) + LatentSync 1.6 lip-sync ($0.003/сек GPU).
+              Длительность видео = длительность озвучки текста. ~$0.009 за 3с клип.
             </p>
           </div>
 
@@ -1453,12 +1495,12 @@ function GenerateTab({
               </>
             ) : (
               <>
-                <Zap className="h-4 w-4" /> Сгенерировать видео (~$0.009/3с)
+                <Zap className="h-4 w-4" /> Сгенерировать видео ($0.003/сек)
               </>
             )}
           </button>
           <p className="text-xs text-emerald-400">
-            Pexels видео + edge-tts голос (FREE) + LatentSync 1.6 lip-sync (RunPod)
+            FREE: Pexels видео + edge-tts голос | Платно: LatentSync 1.6 lip-sync ($0.003/сек)
           </p>
 
           {videoResult && (
